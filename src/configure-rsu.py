@@ -84,7 +84,7 @@ class RSUConfigurationApp(tk.Tk):
         ttk.Button(button_frame, text="Walk RSU MIBs", command=self.walk_mibs).pack(side='left', padx=6)
         ttk.Button(button_frame, text="Quit", command=self.quit).pack(side='right', padx=6)
 
-        # Label + read-only text widget to show some results
+        # Label + read-only text widget to show results
         r += 1
         results_frame = ttk.LabelFrame(body, text="Results", padding=8)
         results_frame.grid(row=r, column=0, columnspan=4, sticky='nsew', padx=6, pady=6)
@@ -97,21 +97,96 @@ class RSUConfigurationApp(tk.Tk):
 
     def create_immediate_forward_tab(self, notebook):
         """Create the Immediate Forward tab"""
-        body = ttk.Frame(notebook, padding=12)
-        notebook.add(body, text="Immediate Forward")
+        ifm_tab = ttk.Frame(notebook, padding=12)
+        notebook.add(ifm_tab, text="Immediate Forward")
 
-        r = 0
-        
+        # Layout config
+        ifm_tab.columnconfigure(0, weight=1)
+        ifm_tab.rowconfigure(1, weight=1)
+
+        # Controls row
+        controls = ttk.Frame(ifm_tab)
+        controls.grid(row=0, column=0, sticky='ew', padx=6, pady=6)
+
+        # Container for IFM rows
+        rows_frame = ttk.Frame(ifm_tab)
+        rows_frame.grid(row=1, column=0, sticky='nsew', padx=6, pady=6)
+        rows_frame.columnconfigure(0, weight=1)
+
+        def destroy_ifm_entry(idx: int, entry_widget: ttk.Entry, button_widget: ttk.Button) -> None:
+            """Destroy IFM entry for the given index and update given UI row."""
+            delete_ifm_oid = f"1.3.6.1.4.1.1206.4.2.18.4.2.1.5.{idx}"
+            self.destroy_entry(delete_ifm_oid, entry_widget, button_widget)
+
+        def get_ifm_info() -> None:
+            """Fetch IFM info and render each result as a read-only row with a Destroy button."""
+            # Clear previous rows
+            for child in rows_frame.winfo_children():
+                child.destroy()
+
+            current_row = 0
+            for i in range(1, 7):
+                get_oid = f"1.3.6.1.4.1.1206.4.2.18.4.2.1.2.{i}"
+                try:
+                    ifm_info = self.session.get(get_oid)
+                    text = f"IFM Index {i}: {ifm_info}"
+                    var = tk.StringVar(value=text)
+                    entry = ttk.Entry(rows_frame, textvariable=var, state='readonly')
+                    entry._var = var  # type: ignore  # Keep StringVar alive
+                    entry.grid(row=current_row, column=0, sticky='ew', padx=4, pady=2)
+                    btn = ttk.Button(rows_frame, text="Destroy")
+                    btn.grid(row=current_row, column=1, sticky='w', padx=4, pady=2)
+                    btn.configure(command=lambda idx=i, e=entry, b=btn: destroy_ifm_entry(idx, e, b))
+                    current_row += 1
+                except easysnmp.EasySNMPError as e:
+                    # Show an error row for this index
+                    err_text = f"IFM Index {i}: error retrieving info"
+                    var = tk.StringVar(value=err_text)
+                    entry = ttk.Entry(rows_frame, textvariable=var, state='readonly')
+                    entry._var = var  # type: ignore  # Keep StringVar alive
+                    entry.grid(row=current_row, column=0, sticky='ew', padx=4, pady=2)
+                    btn = ttk.Button(rows_frame, text="Destroy", state='disabled')
+                    btn.grid(row=current_row, column=1, sticky='w', padx=4, pady=2)
+                    current_row += 1
+                    messagebox.showerror("SNMP Error", str(e))
+
+        ttk.Button(controls, text="Get IFM Info", command=get_ifm_info).pack(side='left', padx=6)
 
     def create_received_message_forward_tab(self, notebook):
         """Create the Received Message Forward tab"""
-        body = ttk.Frame(notebook, padding=12)
-        notebook.add(body, text="Received Message Forward")
+        rmf_tab = ttk.Frame(notebook, padding=12)
+        notebook.add(rmf_tab, text="Received Message Forward")
+
+        # Layout config
+        rmf_tab.columnconfigure(0, weight=1)
+        rmf_tab.rowconfigure(1, weight=1)
+
+        # Controls row
+        controls = ttk.Frame(rmf_tab)
+        controls.grid(row=0, column=0, sticky='ew', padx=6, pady=6)
+
+        # Container for RMF rows
+        rows_frame = ttk.Frame(rmf_tab)
+        rows_frame.grid(row=1, column=0, sticky='nsew', padx=6, pady=6)
+        rows_frame.columnconfigure(0, weight=1)
 
     def create_store_and_repeat_tab(self, notebook):
         """Create the Store-and-Repeat tab"""
-        body = ttk.Frame(notebook, padding=12)
-        notebook.add(body, text="Store-and-Repeat")
+        srm_tab = ttk.Frame(notebook, padding=12)
+        notebook.add(srm_tab, text="Store-and-Repeat")
+
+        # Layout config
+        srm_tab.columnconfigure(0, weight=1)
+        srm_tab.rowconfigure(1, weight=1)
+
+        # Controls row
+        controls = ttk.Frame(srm_tab)
+        controls.grid(row=0, column=0, sticky='ew', padx=6, pady=6)
+
+        # Container for SRM rows
+        rows_frame = ttk.Frame(srm_tab)
+        rows_frame.grid(row=1, column=0, sticky='nsew', padx=6, pady=6)
+        rows_frame.columnconfigure(0, weight=1)
 
     # Methods
     def walk_mibs(self):
@@ -122,7 +197,6 @@ class RSUConfigurationApp(tk.Tk):
         self.update_idletasks()
 
         try:
-            # Example OID for demonstration; replace with actual RSU MIB OIDs
             oid = '1.3.6.1.4.1.1206.4.2.18'
             results = self.session.walk(oid)
             self.results_text.configure(state='normal')
@@ -135,6 +209,15 @@ class RSUConfigurationApp(tk.Tk):
             self.results_text.insert(tk.END, "Error walking MIBs.\n")
             self.results_text.configure(state='disabled')
 
+    def destroy_entry(self, delete_oid: str, entry_widget: ttk.Entry, button_widget: ttk.Button) -> None:
+            """Destroy entry for the given oid and update given UI row."""
+            try:
+                self.session.set(delete_oid, 6)  # 6 = destroy
+                # Remove the row from UI
+                entry_widget.destroy()
+                button_widget.destroy()
+            except easysnmp.EasySNMPError as e:
+                messagebox.showerror("SNMP Error", str(e))
 
 def main():
     root = RSUConfigurationApp()
