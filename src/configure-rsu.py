@@ -150,6 +150,10 @@ class RSUConfigurationApp(tk.Tk):
                     current_row += 1
                     messagebox.showerror("SNMP Error", str(e))
 
+        def set_ifm_info() -> None:
+            # todo
+            pass
+
         ttk.Button(controls, text="Get IFM Info", command=get_ifm_info).pack(side='left', padx=6)
 
     def create_received_message_forward_tab(self, notebook):
@@ -170,6 +174,50 @@ class RSUConfigurationApp(tk.Tk):
         rows_frame.grid(row=1, column=0, sticky='nsew', padx=6, pady=6)
         rows_frame.columnconfigure(0, weight=1)
 
+        def destroy_rfm_entry(idx: int, entry_widget: ttk.Entry, button_widget: ttk.Button) -> None:
+            """Destroy RFM entry for the given index and update given UI row."""
+            delete_ifm_oid = f"1.3.6.1.4.1.1206.4.2.18.5.2.1.10.{idx}"
+            self.destroy_entry(delete_ifm_oid, entry_widget, button_widget)
+
+        def get_rfm_info() -> None:
+            """Fetch RFM info and render each result as a read-only row with a Destroy button."""
+            # Clear previous rows
+            for child in rows_frame.winfo_children():
+                child.destroy()
+
+            current_row = 0
+            for i in range(1, 7):
+                for j in range(2, 5):
+                    get_oid = f"1.3.6.1.4.1.1206.4.2.18.5.2.1.{j}.{i}"
+                    try:
+                        rfm_info = self.session.get(get_oid)
+                        text = f"RFM Index {j}.{i}: {rfm_info}"
+                        var = tk.StringVar(value=text)
+                        entry = ttk.Entry(rows_frame, textvariable=var, state='readonly')
+                        entry._var = var  # type: ignore  # Keep StringVar alive
+                        entry.grid(row=current_row, column=0, sticky='ew', padx=4, pady=2)
+                        btn = ttk.Button(rows_frame, text="Destroy")
+                        btn.grid(row=current_row, column=1, sticky='w', padx=4, pady=2)
+                        btn.configure(command=lambda idx=i, e=entry, b=btn: destroy_rfm_entry(idx, e, b))
+                        current_row += 1
+                    except easysnmp.EasySNMPError as e:
+                        # Show an error row for this index
+                        err_text = f"RFM Index {i}: error retrieving info"
+                        var = tk.StringVar(value=err_text)
+                        entry = ttk.Entry(rows_frame, textvariable=var, state='readonly')
+                        entry._var = var  # type: ignore  # Keep StringVar alive
+                        entry.grid(row=current_row, column=0, sticky='ew', padx=4, pady=2)
+                        btn = ttk.Button(rows_frame, text="Destroy", state='disabled')
+                        btn.grid(row=current_row, column=1, sticky='w', padx=4, pady=2)
+                        current_row += 1
+                        messagebox.showerror("SNMP Error", str(e))
+
+        def set_rfm_info() -> None:
+            # todo
+            pass
+
+        ttk.Button(controls, text="Get RFM Info", command=get_rfm_info).pack(side='left', padx=6)
+
     def create_store_and_repeat_tab(self, notebook):
         """Create the Store-and-Repeat tab"""
         srm_tab = ttk.Frame(notebook, padding=12)
@@ -187,6 +235,50 @@ class RSUConfigurationApp(tk.Tk):
         rows_frame = ttk.Frame(srm_tab)
         rows_frame.grid(row=1, column=0, sticky='nsew', padx=6, pady=6)
         rows_frame.columnconfigure(0, weight=1)
+
+        def destroy_srm_entry(idx: int, entry_widget: ttk.Entry, button_widget: ttk.Button) -> None:
+            """Destroy SRM entry for the given index and update given UI row."""
+            delete_ifm_oid = f"1.3.6.1.4.1.1206.4.2.18.3.2.1.9.{idx}"
+            self.destroy_entry(delete_ifm_oid, entry_widget, button_widget)
+
+        def get_srm_info() -> None:
+            """Fetch SRM info and render each result as a read-only row with a Destroy button."""
+            # Clear previous rows
+            for child in rows_frame.winfo_children():
+                child.destroy()
+
+            current_row = 0
+            for i in range(1, 7):
+                for j in range(2, 8, 5): # get entries 2 and 7 (psid and payload)
+                    get_oid = f"1.3.6.1.4.1.1206.4.2.18.3.2.1.{j}.{i}"
+                    try:
+                        srm_info = self.session.get(get_oid)
+                        text = f"SRM Index {j}.{i}: {srm_info}"
+                        var = tk.StringVar(value=text)
+                        entry = ttk.Entry(rows_frame, textvariable=var, state='readonly')
+                        entry._var = var  # type: ignore  # Keep StringVar alive
+                        entry.grid(row=current_row, column=0, sticky='ew', padx=4, pady=2)
+                        btn = ttk.Button(rows_frame, text="Destroy")
+                        btn.grid(row=current_row, column=1, sticky='w', padx=4, pady=2)
+                        btn.configure(command=lambda idx=i, e=entry, b=btn: destroy_srm_entry(idx, e, b))
+                        current_row += 1
+                    except easysnmp.EasySNMPError as e:
+                        # Show an error row for this index
+                        err_text = f"SRM Index {i}: error retrieving info"
+                        var = tk.StringVar(value=err_text)
+                        entry = ttk.Entry(rows_frame, textvariable=var, state='readonly')
+                        entry._var = var  # type: ignore  # Keep StringVar alive
+                        entry.grid(row=current_row, column=0, sticky='ew', padx=4, pady=2)
+                        btn = ttk.Button(rows_frame, text="Destroy", state='disabled')
+                        btn.grid(row=current_row, column=1, sticky='w', padx=4, pady=2)
+                        current_row += 1
+                        messagebox.showerror("SNMP Error", str(e))
+
+        def set_srm_info() -> None:
+            # todo
+            pass
+
+        ttk.Button(controls, text="Get SRM Info", command=get_srm_info).pack(side='left', padx=6)
 
     # Methods
     def walk_mibs(self):
