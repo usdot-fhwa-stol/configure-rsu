@@ -21,7 +21,7 @@ SNMP_USER=your_snmp_username
 AUTH_PASSWORD=your_authentication_password
 PRIV_PASSWORD=your_privacy_password
 EOF
-    echo ".env file created at $SRC_ENV_FILE"
+    echo "\n.env file created at $SRC_ENV_FILE"
 else
-    echo ".env file already exists at $SRC_ENV_FILE"
+    echo "\n.env file already exists at $SRC_ENV_FILE"
 fi
