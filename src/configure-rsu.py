@@ -553,21 +553,31 @@ class RSUConfigurationApp(tk.Tk):
         controls = ttk.Frame(srm_tab)
         controls.grid(row=0, column=0, sticky='ew', padx=6, pady=6)
 
-        # Container for SRM rows
+        # Configuration section
+        config_frame = ttk.LabelFrame(srm_tab, text="Configure SRM Entries", padding=8)
+        config_frame.grid(row=1, column=0, sticky='ew', padx=6, pady=6)
+        config_frame.columnconfigure(0, weight=1)
+
+        # Container for SRM rows (display results)
         rows_frame = ttk.Frame(srm_tab)
-        rows_frame.grid(row=1, column=0, sticky='nsew', padx=6, pady=6)
+        rows_frame.grid(row=2, column=0, sticky='nsew', padx=6, pady=6)
         rows_frame.columnconfigure(0, weight=1)
+
+        # Storage for SRM entry configurations
+        srm_entries = []
 
         def destroy_srm_entry(idx: int, entry_widget: ttk.Entry, button_widget: ttk.Button) -> None:
             """Destroy SRM entry for the given index and update given UI row."""
-            delete_ifm_oid = f"1.3.6.1.4.1.1206.4.2.18.3.2.1.9.{idx}"
-            self.destroy_entry(delete_ifm_oid, entry_widget, button_widget)
+            delete_srm_oid = f"1.3.6.1.4.1.1206.4.2.18.3.2.1.9.{idx}"
+            self.destroy_entry(delete_srm_oid, entry_widget, button_widget)
 
         def get_srm_info() -> None:
             """Fetch SRM info and render each result as a read-only row with a Destroy button."""
             # Clear previous rows
             for child in rows_frame.winfo_children():
                 child.destroy()
+            # Enable the "Add SRM Entry" button after first Get
+            add_srm_btn.configure(state='normal')
 
             session = self.get_session()
             current_row = 0
@@ -578,7 +588,7 @@ class RSUConfigurationApp(tk.Tk):
                         handle = session.get(get_oid)
                         varbind_list = handle.wait() if hasattr(handle, 'wait') else handle  # type: ignore
                         formatted_value = self.format_snmp_value(varbind_list[0])  # type: ignore
-                        text = f"SRM Index {j}.{i}: {formatted_value}"
+                        text = f"SRM Index {i}: {formatted_value}"
                         var = tk.StringVar(value=text)
                         entry = ttk.Entry(rows_frame, textvariable=var, state='readonly')
                         entry._var = var  # type: ignore  # Keep StringVar alive
@@ -599,12 +609,168 @@ class RSUConfigurationApp(tk.Tk):
                         current_row += 1
                         messagebox.showerror("SNMP Error", str(e))
 
-        def add_srm_entry() -> None:
-            # todo
-            pass
+        def set_single_srm_entry(entry_vars: dict, srm_index: int) -> None:
+            """Configure a single SRM entry."""
+            try:
+                # Get values from the form
+                psid = entry_vars['psid'].get().strip()
+                channel = entry_vars['channel'].get()
+                interval = entry_vars['interval'].get()
+                start_date = entry_vars['start_date'].get().strip()
+                stop_date = entry_vars['stop_date'].get().strip()
+                payload = entry_vars['payload'].get().strip()
+                enable = entry_vars['enable'].get()
+                priority = entry_vars['priority'].get()
+                options = entry_vars['options'].get().strip()
 
+                # Validate inputs
+                if not psid:
+                    messagebox.showerror("Validation Error", f"Entry {srm_index}: PSID cannot be empty")
+                    return
+                if not payload:
+                    messagebox.showerror("Validation Error", f"Entry {srm_index}: Payload cannot be empty")
+                    return
+
+                # Convert date strings to SNMP DateAndTime format
+                try:
+                    start_date_bytes = cr_helper.convert_datetime_to_snmp(start_date)
+                    stop_date_bytes = cr_helper.convert_datetime_to_snmp(stop_date)
+                except ValueError as e:
+                    messagebox.showerror("Validation Error", f"Entry {srm_index}: {e}")
+                    return
+
+                # RSU must be in standby mode to accept configuration changes
+                self._set_standby()
+
+                # Configure the entry using SET operations
+                print(f"Configuring SRM entry {srm_index}")
+                session = self.get_session()
+                base_oid = f"1.3.6.1.4.1.1206.4.2.18.3.2.1"
+                session.set(
+                    (f"{base_oid}.2.{srm_index}", OctetString(unhexlify(psid))),        # rsuMsgRepeatPsid (hex)
+                    (f"{base_oid}.3.{srm_index}", Integer32(int(channel))),             # rsuMsgRepeatTxChannel (integer)
+                    (f"{base_oid}.4.{srm_index}", Integer32(int(interval))),            # rsuMsgRepeatTxInterval (integer)
+                    (f"{base_oid}.5.{srm_index}", OctetString(start_date_bytes)),       # rsuMsgRepeatDeliveryStart (DateAndTime)
+                    (f"{base_oid}.6.{srm_index}", OctetString(stop_date_bytes)),        # rsuMsgRepeatDeliveryStop (DateAndTime)
+                    (f"{base_oid}.7.{srm_index}", OctetString(unhexlify(payload))),     # rsuMsgRepeatPayload (hex)
+                    (f"{base_oid}.8.{srm_index}", Integer32(int(enable))),              # rsuMsgRepeatEnable (integer)
+                    (f"{base_oid}.9.{srm_index}", Integer32(4)),                        # rsuMsgRepeatStatus (4=createAndGo)
+                    (f"{base_oid}.10.{srm_index}", Integer32(int(priority))),           # rsuMsgRepeatPriority (integer)
+                    (f"{base_oid}.11.{srm_index}", OctetString(unhexlify(options)))     # rsuMsgRepeatOptions (BITS)
+                )
+
+                # Return RSU to operate mode
+                self._set_operate()
+
+                messagebox.showinfo("Success", f"Successfully configured SRM entry {srm_index} with PSID {psid}")
+                # Refresh the display
+                get_srm_info()
+
+            except Exception as e:
+                messagebox.showerror("SNMP Error", f"Failed to set SRM entry {srm_index}: {e}")
+
+        def add_srm_entry() -> None:
+            """Add a new configurable SRM entry form with configurable index."""
+            # Configurable index input (defaults to next available index or 1)
+            default_index = (srm_entries[-1]['index'] + 1) if srm_entries else 1
+            index_var = tk.IntVar(value=default_index)
+
+            # Create a frame for this entry
+            entry_frame = ttk.LabelFrame(config_frame, text=f"SRM Entry {index_var.get()}", padding=8)
+            row_pos = len(srm_entries)
+            entry_frame.grid(row=row_pos, column=0, sticky='ew', padx=4, pady=4)
+            entry_frame.columnconfigure(1, weight=1)
+            entry_frame.columnconfigure(3, weight=1)
+
+            # Create variables for this entry
+            idx_val = index_var.get()
+            entry_vars = {
+                'index_var': index_var,
+                'psid': tk.StringVar(value='8002'),
+                'channel': tk.IntVar(value=183),
+                'interval': tk.IntVar(value=1000),
+                'start_date': tk.StringVar(value='2025-01-01,00:00:00.0'),
+                'stop_date': tk.StringVar(value='2030-01-01,00:00:00.0'),
+                'payload': tk.StringVar(value='FF'),
+                'enable': tk.IntVar(value=1),
+                'priority': tk.IntVar(value=6),
+                'options': tk.StringVar(value='01'),
+                'frame': entry_frame,
+                'index': idx_val
+            }
+
+            # Row 0: Index and PSID
+            ttk.Label(entry_frame, text="SRM Index:").grid(row=0, column=0, sticky='e', padx=4, pady=2)
+            def on_index_change(*_args):
+                # Gracefully handle empty/non-integer input while typing
+                try:
+                    new_idx = int(index_var.get())
+                except Exception:
+                    # Keep previous index, do not crash while the field is temporarily empty
+                    new_idx = entry_vars.get('index', default_index)
+                # Clamp to valid range (1..32 typical, but allow >=1)
+                if new_idx < 1:
+                    new_idx = 1
+                    index_var.set(new_idx)
+                entry_vars['index'] = new_idx
+                entry_frame.configure(text=f"SRM Entry {entry_vars['index']}")
+            index_var.trace_add('write', on_index_change)
+            ttk.Entry(entry_frame, textvariable=index_var, width=8).grid(row=0, column=1, sticky='w', padx=4, pady=2)
+
+            ttk.Label(entry_frame, text="PSID (hex):").grid(row=0, column=2, sticky='e', padx=4, pady=2)
+            ttk.Entry(entry_frame, textvariable=entry_vars['psid'], width=15).grid(row=0, column=3, sticky='ew', padx=4, pady=2)
+
+            # Row 1: Channel and Interval
+            ttk.Label(entry_frame, text="TX Channel:").grid(row=1, column=0, sticky='e', padx=4, pady=2)
+            ttk.Entry(entry_frame, textvariable=entry_vars['channel'], width=10, state="readonly").grid(row=1, column=1, sticky='w', padx=4, pady=2)
+            ttk.Label(entry_frame, text="TX Interval (ms):").grid(row=1, column=2, sticky='e', padx=4, pady=2)
+            ttk.Entry(entry_frame, textvariable=entry_vars['interval'], width=10).grid(row=1, column=3, sticky='ew', padx=4, pady=2)
+
+            # Row 2: Start Date
+            ttk.Label(entry_frame, text="Start Date:").grid(row=2, column=0, sticky='e', padx=4, pady=2)
+            ttk.Entry(entry_frame, textvariable=entry_vars['start_date'], width=20).grid(row=2, column=1, columnspan=3, sticky='ew', padx=4, pady=2)
+
+            # Row 3: Stop Date
+            ttk.Label(entry_frame, text="Stop Date:").grid(row=3, column=0, sticky='e', padx=4, pady=2)
+            ttk.Entry(entry_frame, textvariable=entry_vars['stop_date'], width=20).grid(row=3, column=1, columnspan=3, sticky='ew', padx=4, pady=2)
+
+            # Row 4: Payload
+            ttk.Label(entry_frame, text="Payload (hex):").grid(row=4, column=0, sticky='e', padx=4, pady=2)
+            ttk.Entry(entry_frame, textvariable=entry_vars['payload'], width=20).grid(row=4, column=1, columnspan=3, sticky='ew', padx=4, pady=2)
+
+            # Row 5: Enable and Priority
+            ttk.Label(entry_frame, text="Enable (0/1):").grid(row=5, column=0, sticky='e', padx=4, pady=2)
+            ttk.Entry(entry_frame, textvariable=entry_vars['enable'], width=10).grid(row=5, column=1, sticky='w', padx=4, pady=2)
+            ttk.Label(entry_frame, text="Priority:").grid(row=5, column=2, sticky='e', padx=4, pady=2)
+            ttk.Entry(entry_frame, textvariable=entry_vars['priority'], width=10).grid(row=5, column=3, sticky='ew', padx=4, pady=2)
+
+            # Row 6: Options
+            ttk.Label(entry_frame, text="Options (hex):").grid(row=6, column=0, sticky='e', padx=4, pady=2)
+            ttk.Entry(entry_frame, textvariable=entry_vars['options'], width=15).grid(row=6, column=1, columnspan=3, sticky='ew', padx=4, pady=2)
+
+            # Row 7: Button frame for Set and Remove buttons
+            button_frame = ttk.Frame(entry_frame)
+            button_frame.grid(row=7, column=0, columnspan=4, pady=4)
+            set_btn = ttk.Button(button_frame, text="Set Entry", command=lambda: set_single_srm_entry(entry_vars, entry_vars['index']))
+            set_btn.pack(side='left', padx=4)
+            remove_btn = ttk.Button(button_frame, text="Remove Entry", command=lambda: remove_srm_entry(entry_vars))
+            remove_btn.pack(side='left', padx=4)
+
+            srm_entries.append(entry_vars)
+
+        def remove_srm_entry(entry_vars: dict) -> None:
+            """Remove an SRM entry form."""
+            entry_vars['frame'].destroy()
+            srm_entries.remove(entry_vars)
+            # Update titles to reflect each entry's configured index
+            for entry in srm_entries:
+                entry['frame'].configure(text=f"SRM Entry {entry['index']}")
+
+        # Create buttons with "Add SRM Entry" initially disabled
+        add_srm_btn = ttk.Button(controls, text="Add SRM Entry", command=add_srm_entry, state='disabled')
+        add_srm_btn.pack(side='left', padx=6)
         ttk.Button(controls, text="Get SRM Info", command=get_srm_info).pack(side='left', padx=6)
-        ttk.Button(controls, text="Help", command=lambda: self.show_help("Store-and-Repeat", "")).pack(side='left', padx=6)
+        ttk.Button(controls, text="Help", command=lambda: self.show_help("Store-and-Repeat", self.get_srm_help_content())).pack(side='left', padx=6)
 
     # Methods
     def _set_rsu_mode(self, target_mode: int, mode_name: str, max_retries: int = 10) -> None:
@@ -694,9 +860,11 @@ class RSUConfigurationApp(tk.Tk):
 
     def get_ifm_help_content(self) -> str:
         """Return help content for Immediate Forward tab."""
-        return """Immediate Forward Message (IFM) Configuration Help
+        return """Immediate Forward Messages (IFM) Configuration Help
 
 === IFM Entry Fields ===
+For more information on each field, refer to the RSU SNMP MIB documentation section 5.5 Immediate Forward Messages.
+https://www.ntcip.org/file/2025/01/NTCIP-1218-v01A-2024-AsPublished.pdf
 
 PSID: Provider Service Identifier (hex value)
       Identifies the type of message being transmitted.
@@ -707,31 +875,17 @@ Channel: Transmission channel number (typically 172-184)
 Enable: 0 = Disabled, 1 = Enabled
         Controls whether this IFM entry is active.
 
-Priority: Message priority (0-7, higher is more important)
+Priority: Message priority (0-63, higher is more important)
           Determines transmission priority when multiple messages compete.
 
 Payload: Hex value containing the message data to be transmitted.
 
 
-Options: Bit-mapped value for configuring the message.
-
+Options: Bit-mapped options (BITS, hex):
     Bit 0: 0=Bypass1609.2, 1=Process1609.2
-        Controls whether the message should be processed according to 
-        IEEE 1609.2 security standards.
-
-    Bit 1: 0=Secure, 1=Unsecure
-        Determines if the message should be transmitted securely or 
-        without security.
-
-    Bit 2: 0=ContXmit, 1=NoXmitShortTermXceeded
-        Controls transmission behavior when short-term limits are exceeded.
-        0 = Continue transmitting
-        1 = Stop transmission if short-term limit exceeded
-
-    Bit 3: 0=ContXmit, 1=NoXmitLongTermXceeded
-        Controls transmission behavior when long-term limits are exceeded.
-        0 = Continue transmitting
-        1 = Stop transmission if long-term limit exceeded
+    Bit 1: 0=Secure,       1=Unsecure
+    Bit 2: 0=ContXmit,     1=NoXmitShortTermXceeded
+    Bit 3: 0=ContXmit,     1=NoXmitLongTermXceeded
 """
 
     def get_rfm_help_content(self) -> str:
@@ -780,6 +934,49 @@ Secure: Security requirement for forwarded messages
 
 Auth Msg Interval: Authentication message interval in deciseconds
                    0 = No authentication messages
+"""
+
+    def get_srm_help_content(self) -> str:
+        """Return help content for Store and Repeat Messages tab."""
+        return """Store and Repeat Messages (SRM) Configuration Help
+
+=== SRM Entry Fields ===
+For more information on each field, refer to the RSU SNMP MIB documentation section 5.4 Store and Repeat Messages.
+https://www.ntcip.org/file/2025/01/NTCIP-1218-v01A-2024-AsPublished.pdf
+
+PSID: Provider Service Identifier (hex value)
+      Identifies the message type to store and repeat.
+
+TX Channel: Transmission channel number (typically 172-184)
+            The radio channel used when repeating the message.
+
+TX Interval: Transmission interval in milliseconds
+             How often the stored message is repeated. (rsuMsgRepeatTxInterval)
+
+Start Date: Message forwarding start date/time
+            Format: yyyy-mm-dd,hh:mm:ss.ms
+            Example: 2025-01-01,00:00:00.0
+            This is converted to SNMP DateAndTime format (8 octets)
+            Example: 2025-01-01,00:00:00.0 becomes 07 E9 01 01 00 00 00 00
+
+Stop Date: Message forwarding stop date/time
+           Format: yyyy-mm-dd,hh:mm:ss.ms
+           Example: 2030-01-01,00:00:00.0
+           This is converted to SNMP DateAndTime format (8 octets)
+
+Payload: Hex value containing the message data to be transmitted.
+
+Enable: 0 = Disabled, 1 = Enabled
+        Controls whether this SRM entry is active (rsuMsgRepeatEnable).
+
+Priority: Message priority (0-63, higher is more important)
+          Determines transmission priority when multiple messages compete.
+
+Options: Bit-mapped options (BITS, hex):
+    Bit 0: 0=Bypass1609.2, 1=Process1609.2
+    Bit 1: 0=Secure,       1=Unsecure
+    Bit 2: 0=ContXmit,     1=NoXmitShortTermXceeded
+    Bit 3: 0=ContXmit,     1=NoXmitLongTermXceeded
 """
 
     def get_session(self):
