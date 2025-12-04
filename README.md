@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - tkinter
-- easysnmp
+- snmp
 
 Run the [install.sh](/install/install.sh) script to install all dependencies. 
 ```bash

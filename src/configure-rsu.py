@@ -8,6 +8,7 @@ from snmp.smi import OctetString, Integer32
 import os
 from dotenv import load_dotenv
 from binascii import unhexlify
+import cr_helper
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env'))
 
@@ -309,27 +310,199 @@ class RSUConfigurationApp(tk.Tk):
 
         # Layout config
         rmf_tab.columnconfigure(0, weight=1)
-        rmf_tab.rowconfigure(1, weight=1)
+        rmf_tab.rowconfigure(2, weight=1)
 
         # Controls row
         controls = ttk.Frame(rmf_tab)
         controls.grid(row=0, column=0, sticky='ew', padx=6, pady=6)
 
-        # Container for RMF rows
+        # Configuration section
+        config_frame = ttk.LabelFrame(rmf_tab, text="Configure RFM Entries", padding=8)
+        config_frame.grid(row=1, column=0, sticky='ew', padx=6, pady=6)
+        config_frame.columnconfigure(0, weight=1)
+
+        # Container for RFM rows (display results)
         rows_frame = ttk.Frame(rmf_tab)
-        rows_frame.grid(row=1, column=0, sticky='nsew', padx=6, pady=6)
+        rows_frame.grid(row=2, column=0, sticky='nsew', padx=6, pady=6)
         rows_frame.columnconfigure(0, weight=1)
+
+        # Storage for RFM entry configurations
+        rfm_entries = []
+
+        def set_single_rfm_entry(entry_vars: dict, rfm_index: int) -> None:
+            """Configure a single RFM entry."""
+            try:
+                # Get values from the form
+                psid = entry_vars['psid'].get().strip()
+                dest_ip = entry_vars['dest_ip'].get().strip()
+                dest_port = entry_vars['dest_port'].get()
+                protocol = entry_vars['protocol'].get()
+                rssi = entry_vars['rssi'].get()
+                interval = entry_vars['interval'].get()
+                start_date = entry_vars['start_date'].get().strip()
+                stop_date = entry_vars['stop_date'].get().strip()
+                secure = entry_vars['secure'].get()
+                auth_interval = entry_vars['auth_interval'].get()
+
+                # Validate inputs
+                if not psid:
+                    messagebox.showerror("Validation Error", f"Entry {rfm_index}: PSID cannot be empty")
+                    return
+                if not dest_ip:
+                    messagebox.showerror("Validation Error", f"Entry {rfm_index}: Destination IP cannot be empty")
+                    return
+
+                # Convert date strings to SNMP DateAndTime format
+                try:
+                    start_date_bytes = cr_helper.convert_datetime_to_snmp(start_date)
+                    stop_date_bytes = cr_helper.convert_datetime_to_snmp(stop_date)
+                except ValueError as e:
+                    messagebox.showerror("Validation Error", f"Entry {rfm_index}: {e}")
+                    return
+
+                # RSU must be in standby mode to accept configuration changes
+                self._set_standby()
+
+                # Configure the entry using SET operations
+                print(f"Configuring RFM entry {rfm_index}")
+                session = self.get_session()
+                base_oid = f"1.3.6.1.4.1.1206.4.2.18.5.2.1"
+                session.set(
+                    (f"{base_oid}.2.{rfm_index}", OctetString(unhexlify(psid))),        # rsuReceivedMsgPsid (hex)
+                    (f"{base_oid}.3.{rfm_index}", OctetString(dest_ip.encode())),       # rsuReceivedMsgDestIpAddr (string)
+                    (f"{base_oid}.4.{rfm_index}", Integer32(int(dest_port))),           # rsuReceivedMsgDestPort (integer)
+                    (f"{base_oid}.5.{rfm_index}", Integer32(int(protocol))),            # rsuReceivedMsgProtocol (integer)
+                    (f"{base_oid}.6.{rfm_index}", Integer32(int(rssi))),                # rsuReceivedMsgRssi (integer)
+                    (f"{base_oid}.7.{rfm_index}", Integer32(int(interval))),            # rsuReceivedMsgInterval (integer)
+                    (f"{base_oid}.8.{rfm_index}", OctetString(start_date_bytes)),       # rsuReceivedMsgDeliveryStart (DateAndTime)
+                    (f"{base_oid}.9.{rfm_index}", OctetString(stop_date_bytes)),        # rsuReceivedMsgDeliveryStop (DateAndTime)
+                    (f"{base_oid}.10.{rfm_index}", Integer32(4)),                       # rsuReceivedMsgStatus (4=createAndGo)
+                    (f"{base_oid}.11.{rfm_index}", Integer32(int(secure))),             # rsuReceivedMsgSecure (integer)
+                    (f"{base_oid}.12.{rfm_index}", Integer32(int(auth_interval)))       # rsuReceivedMsgAuthMsgInterval (integer)
+                )
+
+                # Return RSU to operate mode
+                self._set_operate()
+
+                messagebox.showinfo("Success", f"Successfully configured RFM entry {rfm_index} with PSID {psid}")
+                # Refresh the display
+                get_rfm_info()
+
+            except Exception as e:
+                messagebox.showerror("SNMP Error", f"Failed to set RFM entry {rfm_index}: {e}")
+
+        def add_rfm_entry() -> None:
+            """Add a new configurable RFM entry form with configurable index."""
+            # Configurable index input (defaults to next available index or 1)
+            default_index = (rfm_entries[-1]['index'] + 1) if rfm_entries else 1
+            index_var = tk.IntVar(value=default_index)
+
+            # Create a frame for this entry
+            entry_frame = ttk.LabelFrame(config_frame, text=f"RFM Entry {index_var.get()}", padding=8)
+            row_pos = len(rfm_entries)
+            entry_frame.grid(row=row_pos, column=0, sticky='ew', padx=4, pady=4)
+            entry_frame.columnconfigure(1, weight=1)
+            entry_frame.columnconfigure(3, weight=1)
+
+            # Create variables for this entry
+            idx_val = index_var.get()
+            entry_vars = {
+                'index_var': index_var,
+                'psid': tk.StringVar(value='8002' if idx_val == 1 else '8003'),
+                'dest_ip': tk.StringVar(value='192.168.55.152'),
+                'dest_port': tk.IntVar(value=5398),
+                'protocol': tk.IntVar(value=2),  # 2=UDP
+                'rssi': tk.IntVar(value=-100),
+                'interval': tk.IntVar(value=1),
+                'start_date': tk.StringVar(value='2025-01-01,00:00:00.0'),
+                'stop_date': tk.StringVar(value='2030-01-01,00:00:00.0'),
+                'secure': tk.IntVar(value=0),
+                'auth_interval': tk.IntVar(value=0),
+                'frame': entry_frame,
+                'index': idx_val
+            }
+
+            # Row 0: Index and PSID
+            ttk.Label(entry_frame, text="RFM Index:").grid(row=0, column=0, sticky='e', padx=4, pady=2)
+            def on_index_change(*_args):
+                # Gracefully handle empty/non-integer input while typing
+                try:
+                    new_idx = int(index_var.get())
+                except Exception:
+                    # Keep previous index, do not crash while the field is temporarily empty
+                    new_idx = entry_vars.get('index', default_index)
+                # Clamp to valid range (1..32 typical, but allow >=1)
+                if new_idx < 1:
+                    new_idx = 1
+                    index_var.set(new_idx)
+                entry_vars['index'] = new_idx
+                entry_frame.configure(text=f"RFM Entry {entry_vars['index']}")
+            index_var.trace_add('write', on_index_change)
+            ttk.Entry(entry_frame, textvariable=index_var, width=8).grid(row=0, column=1, sticky='w', padx=4, pady=2)
+
+            ttk.Label(entry_frame, text="PSID (hex):").grid(row=0, column=2, sticky='e', padx=4, pady=2)
+            ttk.Entry(entry_frame, textvariable=entry_vars['psid'], width=15).grid(row=0, column=3, sticky='ew', padx=4, pady=2)
+
+            # Row 1: Destination IP and Port
+            ttk.Label(entry_frame, text="Dest IP:").grid(row=1, column=0, sticky='e', padx=4, pady=2)
+            ttk.Entry(entry_frame, textvariable=entry_vars['dest_ip'], width=15).grid(row=1, column=1, sticky='ew', padx=4, pady=2)
+            ttk.Label(entry_frame, text="Dest Port:").grid(row=1, column=2, sticky='e', padx=4, pady=2)
+            ttk.Entry(entry_frame, textvariable=entry_vars['dest_port'], width=10).grid(row=1, column=3, sticky='ew', padx=4, pady=2)
+
+            # Row 2: Protocol and RSSI
+            ttk.Label(entry_frame, text="Protocol:").grid(row=2, column=0, sticky='e', padx=4, pady=2)
+            ttk.Combobox(entry_frame, textvariable=entry_vars['protocol'], values=['2'], width=8, state="readonly").grid(row=2, column=1, sticky='w', padx=4, pady=2)
+            ttk.Label(entry_frame, text="RSSI:").grid(row=2, column=2, sticky='e', padx=4, pady=2)
+            ttk.Entry(entry_frame, textvariable=entry_vars['rssi'], width=10, state="readonly").grid(row=2, column=3, sticky='ew', padx=4, pady=2)
+
+            # Row 3: Interval and Secure
+            ttk.Label(entry_frame, text="Interval:").grid(row=3, column=0, sticky='e', padx=4, pady=2)
+            ttk.Entry(entry_frame, textvariable=entry_vars['interval'], width=10).grid(row=3, column=1, sticky='w', padx=4, pady=2)
+            ttk.Label(entry_frame, text="Secure (0/1):").grid(row=3, column=2, sticky='e', padx=4, pady=2)
+            ttk.Entry(entry_frame, textvariable=entry_vars['secure'], width=10).grid(row=3, column=3, sticky='ew', padx=4, pady=2)
+
+            # Row 4: Start Date
+            ttk.Label(entry_frame, text="Start Date:").grid(row=4, column=0, sticky='e', padx=4, pady=2)
+            ttk.Entry(entry_frame, textvariable=entry_vars['start_date'], width=20).grid(row=4, column=1, columnspan=3, sticky='ew', padx=4, pady=2)
+
+            # Row 5: Stop Date
+            ttk.Label(entry_frame, text="Stop Date:").grid(row=5, column=0, sticky='e', padx=4, pady=2)
+            ttk.Entry(entry_frame, textvariable=entry_vars['stop_date'], width=20).grid(row=5, column=1, columnspan=3, sticky='ew', padx=4, pady=2)
+
+            # Row 6: Auth Interval
+            ttk.Label(entry_frame, text="Auth Msg Interval:").grid(row=6, column=0, sticky='e', padx=4, pady=2)
+            ttk.Entry(entry_frame, textvariable=entry_vars['auth_interval'], width=10).grid(row=6, column=1, sticky='w', padx=4, pady=2)
+
+            # Row 7: Button frame for Set and Remove buttons
+            button_frame = ttk.Frame(entry_frame)
+            button_frame.grid(row=7, column=0, columnspan=4, pady=4)
+            set_btn = ttk.Button(button_frame, text="Set Entry", command=lambda: set_single_rfm_entry(entry_vars, entry_vars['index']))
+            set_btn.pack(side='left', padx=4)
+            remove_btn = ttk.Button(button_frame, text="Remove Entry", command=lambda: remove_rfm_entry(entry_vars))
+            remove_btn.pack(side='left', padx=4)
+
+            rfm_entries.append(entry_vars)
+
+        def remove_rfm_entry(entry_vars: dict) -> None:
+            """Remove an RFM entry form."""
+            entry_vars['frame'].destroy()
+            rfm_entries.remove(entry_vars)
+            # Update titles to reflect each entry's configured index
+            for entry in rfm_entries:
+                entry['frame'].configure(text=f"RFM Entry {entry['index']}")
 
         def destroy_rfm_entry(idx: int, entry_widget: ttk.Entry, button_widget: ttk.Button) -> None:
             """Destroy RFM entry for the given index and update given UI row."""
-            delete_ifm_oid = f"1.3.6.1.4.1.1206.4.2.18.5.2.1.10.{idx}"
-            self.destroy_entry(delete_ifm_oid, entry_widget, button_widget)
+            delete_rfm_oid = f"1.3.6.1.4.1.1206.4.2.18.5.2.1.10.{idx}"
+            self.destroy_entry(delete_rfm_oid, entry_widget, button_widget)
 
         def get_rfm_info() -> None:
             """Fetch RFM info and render each result as a read-only row with a Destroy button."""
             # Clear previous rows
             for child in rows_frame.winfo_children():
                 child.destroy()
+            # Enable the "Add RFM Entry" button after first Get
+            add_rfm_btn.configure(state='normal')
 
             session = self.get_session()
             current_row = 0
@@ -340,7 +513,7 @@ class RSUConfigurationApp(tk.Tk):
                         handle = session.get(get_oid)
                         varbind_list = handle.wait() if hasattr(handle, 'wait') else handle  # type: ignore
                         formatted_value = self.format_snmp_value(varbind_list[0])  # type: ignore
-                        text = f"RFM Index {j}.{i}: {formatted_value}"
+                        text = f"RFM Index {i}: {formatted_value}"
                         var = tk.StringVar(value=text)
                         entry = ttk.Entry(rows_frame, textvariable=var, state='readonly')
                         entry._var = var  # type: ignore  # Keep StringVar alive
@@ -361,12 +534,11 @@ class RSUConfigurationApp(tk.Tk):
                         current_row += 1
                         messagebox.showerror("SNMP Error", str(e))
 
-        def set_rfm_info() -> None:
-            # todo
-            pass
-
+        # Create buttons with "Add RFM Entry" initially disabled
+        add_rfm_btn = ttk.Button(controls, text="Add RFM Entry", command=add_rfm_entry, state='disabled')
+        add_rfm_btn.pack(side='left', padx=6)
         ttk.Button(controls, text="Get RFM Info", command=get_rfm_info).pack(side='left', padx=6)
-        ttk.Button(controls, text="Help", command=lambda: self.show_help("Received Message Forward", "")).pack(side='left', padx=6)
+        ttk.Button(controls, text="Help", command=lambda: self.show_help("Received Message Forward", self.get_rfm_help_content())).pack(side='left', padx=6)
 
     def create_store_and_repeat_tab(self, notebook):
         """Create the Store-and-Repeat tab"""
@@ -427,7 +599,7 @@ class RSUConfigurationApp(tk.Tk):
                         current_row += 1
                         messagebox.showerror("SNMP Error", str(e))
 
-        def set_srm_info() -> None:
+        def add_srm_entry() -> None:
             # todo
             pass
 
@@ -562,6 +734,54 @@ Options: Bit-mapped value for configuring the message.
         1 = Stop transmission if long-term limit exceeded
 """
 
+    def get_rfm_help_content(self) -> str:
+        """Return help content for Received Message Forward tab."""
+        return """Received Message Forward (RFM) Configuration Help
+
+=== RFM Entry Fields ===
+For more information on each field, refer to the RSU SNMP MIB documentation section 5.6 Received Messages.
+https://www.ntcip.org/file/2025/01/NTCIP-1218-v01A-2024-AsPublished.pdf
+
+PSID: Provider Service Identifier (hex value)
+      Identifies the type of message to forward when received.
+
+Destination IP: IP address where received messages will be forwarded.
+                The IP address of the destination system.
+
+Destination Port: Port number for forwarding.
+                  The port on the destination system.
+
+Protocol: Transport protocol for forwarding
+          1 = Other (A SET to a value of 'other' shall return a badValue error.)
+          2 = UDP (User Datagram Protocol)
+
+RSSI: Received Signal Strength Indicator threshold (dBm)
+      Minimum signal strength required to forward message.
+      Typical value: -100 (dBm)
+
+Interval: Forwarding interval in deciseconds (1/10 second)
+          Controls how often messages are forwarded.
+          1 = 100ms, 10 = 1 second
+
+Start Date: Message forwarding start date/time
+            Format: yyyy-mm-dd,hh:mm:ss.ms
+            Example: 2025-01-01,00:00:00.0
+            This is converted to SNMP DateAndTime format (8 octets)
+            Example: 2025-01-01,00:00:00.0 becomes 07 E9 01 01 00 00 00 00
+
+Stop Date: Message forwarding stop date/time
+           Format: yyyy-mm-dd,hh:mm:ss.ms
+           Example: 2030-01-01,00:00:00.0
+           This is converted to SNMP DateAndTime format (8 octets)
+
+Secure: Security requirement for forwarded messages
+        0 = Accept both secure and unsecure messages
+        1 = Accept only secure messages
+
+Auth Msg Interval: Authentication message interval in deciseconds
+                   0 = No authentication messages
+"""
+
     def get_session(self):
         """Create and return a new SNMP manager with current credentials."""
         # Map protocol strings to snmp library constants
@@ -649,19 +869,56 @@ Options: Bit-mapped value for configuring the message.
             messagebox.showerror("Error", f"Failed to destroy entry: {e}")
 
     def format_snmp_value(self, varbind):
-        """Format SNMP VarBind value, converting binary data to hex string if needed."""
+        """Format SNMP VarBind value, converting binary data to hex string if needed, and 8-byte octet strings to datetime."""
         # varbind has .value attribute which is an snmp.smi.ObjectSyntax object
         value = varbind.value
+        
+        # Handle INTEGER32 types
+        if hasattr(value, 'value') and isinstance(value.value, int):
+            return str(value.value)
         
         # Handle different value types from snmp library
         if hasattr(value, 'data'):  # OctetString type
             data = value.data
             if isinstance(data, bytes):
+                # Check if this is an 8-byte DateAndTime value
+                if len(data) == 8:
+                    # Try to convert to datetime string
+                    datetime_str = cr_helper.convert_snmp_datetime_to_string(data)
+                    # Only return as datetime if it looks valid (not all hex)
+                    if ',' in datetime_str and '-' in datetime_str:
+                        return datetime_str
+                
+                # Try to decode as UTF-8 string first
+                try:
+                    decoded_str = data.decode('utf-8')
+                    # If it's printable, return as string
+                    if all(32 <= ord(c) <= 126 or c in '\t\n\r' for c in decoded_str):
+                        return decoded_str
+                except (UnicodeDecodeError, AttributeError):
+                    pass
+                
+                # Return as hex string if not printable
                 return ' '.join(f'{b:02x}' for b in data)
             elif isinstance(data, str):
                 return data
             return str(data)
         elif isinstance(value, bytes):
+            # Check if this is an 8-byte DateAndTime value
+            if len(value) == 8:
+                datetime_str = cr_helper.convert_snmp_datetime_to_string(value)
+                if ',' in datetime_str and '-' in datetime_str:
+                    return datetime_str
+            
+            # Try to decode as UTF-8 string first
+            try:
+                decoded_str = value.decode('utf-8')
+                # If it's printable, return as string
+                if all(32 <= ord(c) <= 126 or c in '\t\n\r' for c in decoded_str):
+                    return decoded_str
+            except (UnicodeDecodeError, AttributeError):
+                pass
+            
             return ' '.join(f'{b:02x}' for b in value)
         elif isinstance(value, str):
             # Check if string contains non-printable characters
@@ -669,6 +926,8 @@ Options: Bit-mapped value for configuring the message.
                 # Convert to hex
                 return ' '.join(f'{ord(c):02x}' for c in value)
             return value
+        elif isinstance(value, int):
+            return str(value)
         
         return str(value)
 
