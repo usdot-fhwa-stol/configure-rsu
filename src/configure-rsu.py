@@ -455,8 +455,7 @@ class RSUConfigurationApp(tk.Tk):
 
                 # Set the mode
                 try:
-                    set_result = session.set((mode_oid, Integer32(target_mode)))
-                    print(f"Mode SET command sent successfully, result: {set_result}")
+                    session.set((mode_oid, Integer32(target_mode)))
                 except Exception as set_error:
                     print(f"ERROR during SET: {set_error}")
                     print(f"SET error type: {type(set_error).__name__}")
