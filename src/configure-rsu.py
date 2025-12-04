@@ -640,15 +640,13 @@ Options: Bit-mapped value for configuring the message.
         """Destroy entry for the given oid and update given UI row."""
         try:
             session = self.get_session()
-            # RowStatus uses INTEGER. 6 = destroy
-            session.set((delete_oid, Integer32(6)))
+            session.set((delete_oid, Integer32(6))) # This OID (RowStatus) uses INTEGER32. 6 = destroy
             # Remove the row from UI
             entry_widget.destroy()
             button_widget.destroy()
         except (Timeout, ErrorResponse) as e:
             messagebox.showerror("SNMP Error", str(e))
         except Exception as e:
-            # Catch-all to avoid crashing the app on unexpected native errors
             messagebox.showerror("Error", f"Failed to destroy entry: {e}")
 
     def format_snmp_value(self, varbind):
