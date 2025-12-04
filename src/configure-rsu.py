@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
 import tkinter as tk
 from tkinter import messagebox, ttk
-import easysnmp
+from snmp import Engine, Timeout, ErrorResponse
+from snmp.security.usm.auth import HmacMd5, HmacSha, HmacSha256, HmacSha512
+from snmp.security.usm.priv import DesCbc, AesCfb128
+from snmp.smi import OctetString, Integer32
 import os
 from dotenv import load_dotenv
 from binascii import unhexlify
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env'))
+
+# Initialize SNMP Engine
+snmp_engine = Engine()
 
 # Load SNMP credentials from environment variables
 SNMP_USER = os.getenv('SNMP_USER')
@@ -59,7 +65,7 @@ class RSUConfigurationApp(tk.Tk):
         r += 1
         ttk.Label(body, text="Auth Protocol:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
         self.auth_protocol_var = tk.StringVar(value="SHA")
-        ttk.Combobox(body, textvariable=self.auth_protocol_var, values=["MD5", "SHA"]).grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
+        ttk.Combobox(body, textvariable=self.auth_protocol_var, values=["MD5", "SHA", "SHA256", "SHA512"]).grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
         r += 1
         ttk.Label(body, text="Auth Password:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
         self.auth_password_var = tk.StringVar(value=AUTH_PASSWORD if AUTH_PASSWORD else "authpass")
@@ -134,40 +140,32 @@ class RSUConfigurationApp(tk.Tk):
                     messagebox.showerror("Validation Error", f"Entry {ifm_index}: PSID cannot be empty")
                     return
 
-                psid_bytes = unhexlify(psid)
-                options_bytes = unhexlify(options)
-                payload_bytes = unhexlify(payload)
-                print(f"Prepared byte values - PSID: {psid_bytes}, Options: {options_bytes}, Payload: {payload_bytes}")
-
                 # RSU must be in standby mode to accept configuration changes
-                self._set_standby()
-                
-                session = self.get_session()
-                
+                self._set_standby() 
+
+                # Configure the entry using SET operations
                 print(f"Configuring IFM entry {ifm_index}")
-                # Set OIDs individually with explicit types for clearer errors
+                session = self.get_session()
                 base_oid = f"1.3.6.1.4.1.1206.4.2.18.4.2.1"
-                session.set(f"{base_oid}.2.{ifm_index}", psid_bytes, "Hex-STRING")      # rsuIFMPsid (octet string as hex)
-                session.set(f"{base_oid}.3.{ifm_index}", int(channel), "INTEGER")  # rsuIFMTxChannel (integer)
-                session.set(f"{base_oid}.4.{ifm_index}", int(enable), "INTEGER")   # rsuIFMEnable
-                session.set(f"{base_oid}.5.{ifm_index}", 4, "INTEGER")             # rsuIFMStatus (4=createAndGo)
-                session.set(f"{base_oid}.6.{ifm_index}", int(priority), "INTEGER") # rsuIFMPriority
-                session.set(f"{base_oid}.7.{ifm_index}", options_bytes, "Hex-STRING")   # rsuIFMOptions (bits)
-                session.set(f"{base_oid}.8.{ifm_index}", payload_bytes, "Hex-STRING")   # rsuIFMPayload (hex)
-                
+                session.set(
+                    (f"{base_oid}.2.{ifm_index}", OctetString(unhexlify(psid))),      # rsuIFMPsid (octet string as hex)
+                    (f"{base_oid}.3.{ifm_index}", Integer32(int(channel))),           # rsuIFMTxChannel (integer)
+                    (f"{base_oid}.4.{ifm_index}", Integer32(int(enable))),            # rsuIFMEnable
+                    (f"{base_oid}.5.{ifm_index}", Integer32(4)),                      # rsuIFMStatus (4=createAndGo)
+                    (f"{base_oid}.6.{ifm_index}", Integer32(int(priority))),          # rsuIFMPriority
+                    (f"{base_oid}.7.{ifm_index}", OctetString(unhexlify(options))),   # rsuIFMOptions (bits)
+                    (f"{base_oid}.8.{ifm_index}", OctetString(unhexlify(payload)))    # rsuIFMPayload (hex)
+                )
+
                 # Return RSU to operate mode
                 self._set_operate()
-                
+
                 messagebox.showinfo("Success", f"Successfully configured IFM entry {ifm_index} with PSID {psid}")
                 # Refresh the display
                 get_ifm_info()
-                
-            except easysnmp.EasySNMPError as e:
-                messagebox.showerror("SNMP Error", f"Failed to set IFM entry {ifm_index}: {e}")
-            except tk.TclError as e:
-                messagebox.showerror("Validation Error", f"Entry {ifm_index}: Invalid input - {e}")
+
             except Exception as e:
-                messagebox.showerror("Error", f"Failed to configure IFM entry {ifm_index}: {e}")
+                messagebox.showerror("SNMP Error", f"Failed to set IFM entry {ifm_index}: {e}")
 
         def add_ifm_entry() -> None:
             """Add a new configurable IFM entry form with configurable index."""
@@ -273,8 +271,9 @@ class RSUConfigurationApp(tk.Tk):
             for i in range(1, 7):
                 get_oid = f"1.3.6.1.4.1.1206.4.2.18.4.2.1.2.{i}"
                 try:
-                    ifm_info = session.get(get_oid)
-                    formatted_value = self.format_snmp_value(ifm_info)
+                    handle = session.get(get_oid)
+                    varbind_list = handle.wait() if hasattr(handle, 'wait') else handle  # type: ignore
+                    formatted_value = self.format_snmp_value(varbind_list[0])  # type: ignore
                     text = f"IFM Index {i}: {formatted_value}"
                     var = tk.StringVar(value=text)
                     entry = ttk.Entry(rows_frame, textvariable=var, state='readonly')
@@ -284,7 +283,7 @@ class RSUConfigurationApp(tk.Tk):
                     btn.grid(row=current_row, column=1, sticky='w', padx=4, pady=2)
                     btn.configure(command=lambda idx=i, e=entry, b=btn: destroy_ifm_entry(idx, e, b))
                     current_row += 1
-                except easysnmp.EasySNMPError as e:
+                except (Timeout, ErrorResponse) as e:
                     # Show an error row for this index
                     err_text = f"IFM Index {i}: error retrieving info"
                     var = tk.StringVar(value=err_text)
@@ -338,8 +337,9 @@ class RSUConfigurationApp(tk.Tk):
                 for j in range(2, 5):
                     get_oid = f"1.3.6.1.4.1.1206.4.2.18.5.2.1.{j}.{i}"
                     try:
-                        rfm_info = session.get(get_oid)
-                        formatted_value = self.format_snmp_value(rfm_info)
+                        handle = session.get(get_oid)
+                        varbind_list = handle.wait() if hasattr(handle, 'wait') else handle  # type: ignore
+                        formatted_value = self.format_snmp_value(varbind_list[0])  # type: ignore
                         text = f"RFM Index {j}.{i}: {formatted_value}"
                         var = tk.StringVar(value=text)
                         entry = ttk.Entry(rows_frame, textvariable=var, state='readonly')
@@ -349,7 +349,7 @@ class RSUConfigurationApp(tk.Tk):
                         btn.grid(row=current_row, column=1, sticky='w', padx=4, pady=2)
                         btn.configure(command=lambda idx=i, e=entry, b=btn: destroy_rfm_entry(idx, e, b))
                         current_row += 1
-                    except easysnmp.EasySNMPError as e:
+                    except (Timeout, ErrorResponse) as e:
                         # Show an error row for this index
                         err_text = f"RFM Index {i}: error retrieving info"
                         var = tk.StringVar(value=err_text)
@@ -403,8 +403,9 @@ class RSUConfigurationApp(tk.Tk):
                 for j in range(2, 8, 5): # get entries 2 and 7 (psid and payload)
                     get_oid = f"1.3.6.1.4.1.1206.4.2.18.3.2.1.{j}.{i}"
                     try:
-                        srm_info = session.get(get_oid)
-                        formatted_value = self.format_snmp_value(srm_info)
+                        handle = session.get(get_oid)
+                        varbind_list = handle.wait() if hasattr(handle, 'wait') else handle  # type: ignore
+                        formatted_value = self.format_snmp_value(varbind_list[0])  # type: ignore
                         text = f"SRM Index {j}.{i}: {formatted_value}"
                         var = tk.StringVar(value=text)
                         entry = ttk.Entry(rows_frame, textvariable=var, state='readonly')
@@ -414,7 +415,7 @@ class RSUConfigurationApp(tk.Tk):
                         btn.grid(row=current_row, column=1, sticky='w', padx=4, pady=2)
                         btn.configure(command=lambda idx=i, e=entry, b=btn: destroy_srm_entry(idx, e, b))
                         current_row += 1
-                    except easysnmp.EasySNMPError as e:
+                    except (Timeout, ErrorResponse) as e:
                         # Show an error row for this index
                         err_text = f"SRM Index {i}: error retrieving info"
                         var = tk.StringVar(value=err_text)
@@ -439,31 +440,48 @@ class RSUConfigurationApp(tk.Tk):
         import time
         mode_oid = "1.3.6.1.4.1.1206.4.2.18.16.2.0"
         print(f"Setting RSU to {mode_name} mode...")
-        
+
         for attempt in range(max_retries):
             try:
+                # Get session and check current mode
                 session = self.get_session()
-                current = session.get(mode_oid)
-                current_mode = int(current.value) if hasattr(current, 'value') else int(current) # type: ignore
-                
+                handle = session.get(mode_oid)
+                varbind_list = handle.wait() if hasattr(handle, 'wait') else handle  # type: ignore
+                value_obj = varbind_list[0].value  # type: ignore
+                current_mode = value_obj.value if hasattr(value_obj, 'value') else value_obj
                 if current_mode == target_mode:
                     print(f"RSU already in {mode_name} mode.")
-                    return  # Already in target mode
-                
-                # Set the mode - use string representation to ensure type inference
-                session.set(mode_oid, str(target_mode), "INTEGER")
-                time.sleep(1)
-                current = session.get(mode_oid)
-                current_mode = int(current.value) if hasattr(current, 'value') else int(current) # type: ignore
-                
+                    return
+
+                # Set the mode
+                try:
+                    set_result = session.set((mode_oid, Integer32(target_mode)))
+                    print(f"Mode SET command sent successfully, result: {set_result}")
+                except Exception as set_error:
+                    print(f"ERROR during SET: {set_error}")
+                    print(f"SET error type: {type(set_error).__name__}")
+                    raise
+
+                # Verify the mode change
+                handle = session.get(mode_oid)
+                varbind_list = handle.wait() if hasattr(handle, 'wait') else handle  # type: ignore
+                value_obj = varbind_list[0].value  # type: ignore
+                current_mode = value_obj.value if hasattr(value_obj, 'value') else value_obj
                 if current_mode == target_mode:
                     print(f"RSU successfully set to {mode_name} mode.")
-                    return # Success
-                
-            except easysnmp.EasySNMPError as e:
+                    return
+                else:
+                    print(f"Warning: Mode is {current_mode} but expected {target_mode}, retrying...")
+
+            except (Timeout, ErrorResponse) as e:
+                print(f"SNMP Exception caught: {type(e).__name__}: {e}")
                 if attempt == max_retries - 1:
                     raise Exception(f"Failed to set RSU to {mode_name} mode after {max_retries} attempts: {e}")
+                print(f"Retrying (attempt {attempt + 1}/{max_retries})...")
                 time.sleep(1)
+            except Exception as e:
+                print(f"Unexpected exception: {type(e).__name__}: {e}")
+                raise
 
     def _set_standby(self) -> None:
         """Set RSU to standby mode (2)."""
@@ -546,18 +564,44 @@ Options: Bit-mapped value for configuring the message.
 """
 
     def get_session(self):
-        """Create and return a new SNMP session with current credentials."""
-        return easysnmp.Session(
-            version=3,
-            hostname=self.hostname_var.get(),
-            remote_port=self.port_var.get(),
-            security_username=self.snmpv3_user_var.get(),
-            security_level=self.security_level_var.get(),
-            auth_protocol=self.auth_protocol_var.get(),
-            auth_password=self.auth_password_var.get(),
-            privacy_protocol=self.privacy_protocol_var.get(),
-            privacy_password=self.privacy_password_var.get()
-        )
+        """Create and return a new SNMP manager with current credentials."""
+        # Map protocol strings to snmp library constants
+        auth_protocol_map = {
+            "MD5": HmacMd5,
+            "SHA": HmacSha,
+            "SHA256": HmacSha256,
+            "SHA512": HmacSha512,
+        }
+        priv_protocol_map = {
+            "DES": DesCbc,
+            "AES": AesCfb128,
+        }
+        
+        auth_protocol = auth_protocol_map.get(self.auth_protocol_var.get(), HmacSha)
+        priv_protocol = priv_protocol_map.get(self.privacy_protocol_var.get(), AesCfb128)
+        
+        username = self.snmpv3_user_var.get()
+        auth_password = self.auth_password_var.get()
+        priv_password = self.privacy_password_var.get()
+        
+        # Add user to engine if not already added
+        try:
+            snmp_engine.addUser(
+                username,
+                authProtocol=auth_protocol,
+                authSecret=auth_password.encode() if isinstance(auth_password, str) else auth_password,
+                privProtocol=priv_protocol,
+                privSecret=priv_password.encode() if isinstance(priv_password, str) else priv_password,
+            )
+        except Exception:
+            # User may already exist; ignore error
+            pass
+        
+        # Create and return manager
+        hostname = self.hostname_var.get()
+        port = self.port_var.get()
+        manager = snmp_engine.Manager((hostname, port), defaultUser=username)
+        return manager
 
     def test_connection(self):
         """Test SNMP connection by performing a simple GET operation."""
@@ -571,12 +615,14 @@ Options: Bit-mapped value for configuring the message.
             self.update_idletasks()
 
             try:
-                test_result = session.get('1.3.6.1.2.1.1.1.0')  # sysDescr - standard OID
+                handle = session.get('1.3.6.1.2.1.1.1.0')  # sysDescr - standard OID
+                varbind_list = handle.wait() if hasattr(handle, 'wait') else handle  # type: ignore
+                formatted_value = self.format_snmp_value(varbind_list[0])  # type: ignore
                 self.results_text.configure(state='normal')
-                self.results_text.insert(tk.END, f"Connection OK: {test_result.value}\n\n") # type: ignore
+                self.results_text.insert(tk.END, f"Connection OK: {formatted_value}\n\n")
                 self.results_text.configure(state='disabled')
                 self.update_idletasks()
-            except easysnmp.EasySNMPError as e:
+            except (Timeout, ErrorResponse) as e:
                 self.results_text.configure(state='normal')
                 self.results_text.insert(tk.END, f"Connection test failed: {e}\n")
                 self.results_text.insert(tk.END, "Check your credentials and device accessibility.\n")
@@ -584,7 +630,7 @@ Options: Bit-mapped value for configuring the message.
                 messagebox.showerror("Connection Error", f"Failed to connect to device:\n{e}")
                 return
 
-        except easysnmp.EasySNMPError as e:
+        except (Timeout, ErrorResponse) as e:
             messagebox.showerror("SNMP Error", str(e))
             self.results_text.configure(state='normal')
             self.results_text.insert(tk.END, f"\nUnexpected error: {e}\n")
@@ -594,29 +640,39 @@ Options: Bit-mapped value for configuring the message.
         """Destroy entry for the given oid and update given UI row."""
         try:
             session = self.get_session()
-            # RowStatus uses INTEGER. Explicit type avoids native segfaults.
-            session.set(delete_oid, 6, 'i')  # 6 = destroy
+            # RowStatus uses INTEGER. 6 = destroy
+            session.set((delete_oid, Integer32(6)))
             # Remove the row from UI
             entry_widget.destroy()
             button_widget.destroy()
-        except easysnmp.EasySNMPError as e:
+        except (Timeout, ErrorResponse) as e:
             messagebox.showerror("SNMP Error", str(e))
         except Exception as e:
             # Catch-all to avoid crashing the app on unexpected native errors
             messagebox.showerror("Error", f"Failed to destroy entry: {e}")
 
-    def format_snmp_value(self, snmp_var):
-        """Format SNMP value, converting binary data to hex string if needed."""
-        value = snmp_var.value
-
-        # If bytes or non-printable characters, display as hex
-        if isinstance(value, bytes):
+    def format_snmp_value(self, varbind):
+        """Format SNMP VarBind value, converting binary data to hex string if needed."""
+        # varbind has .value attribute which is an snmp.smi.ObjectSyntax object
+        value = varbind.value
+        
+        # Handle different value types from snmp library
+        if hasattr(value, 'data'):  # OctetString type
+            data = value.data
+            if isinstance(data, bytes):
+                return ' '.join(f'{b:02x}' for b in data)
+            elif isinstance(data, str):
+                return data
+            return str(data)
+        elif isinstance(value, bytes):
             return ' '.join(f'{b:02x}' for b in value)
         elif isinstance(value, str):
             # Check if string contains non-printable characters
             if any(ord(c) < 32 or ord(c) > 126 for c in value):
                 # Convert to hex
                 return ' '.join(f'{ord(c):02x}' for c in value)
+            return value
+        
         return str(value)
 
 def main():
