@@ -258,7 +258,11 @@ class RSUConfigurationApp(tk.Tk):
         def destroy_ifm_entry(idx: int, entry_widget: ttk.Entry, button_widget: ttk.Button) -> None:
             """Destroy IFM entry for the given index and update given UI row."""
             delete_ifm_oid = f"1.3.6.1.4.1.1206.4.2.18.4.2.1.5.{idx}"
+            # RSU must be in standby mode to accept configuration changes
+            self._set_standby()
             self.destroy_entry(delete_ifm_oid, entry_widget, button_widget)
+            # Return RSU to operate mode
+            self._set_operate()
 
         def get_ifm_info() -> None:
             """Fetch IFM info and render each result as a read-only row with a Destroy button."""
