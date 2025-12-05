@@ -804,11 +804,6 @@ class RSUConfigurationApp(tk.Tk):
         mode_status_oid = "1.3.6.1.4.1.1206.4.2.18.16.3.0"
         status_modes = {1: "other", 2: "standby", 3: "operate", 4: "fault"}
 
-        self.results_text.configure(state='normal')
-        self.results_text.insert(tk.END, "Getting RSU mode status...\n")
-        self.results_text.configure(state='disabled')
-        self.update_idletasks()
-
         try:
             session = self.get_session()
             handle = session.get(mode_status_oid)
@@ -1066,34 +1061,20 @@ Options: Bit-mapped options (BITS, hex):
         """Test SNMP connection by performing a simple GET operation."""
         try:
             session = self.get_session()
-
-            # Try a simple GET to verify connection and permissions
+            handle = session.get('1.3.6.1.2.1.1.1.0')  # sysDescr - standard OID
+            varbind_list = handle.wait() if hasattr(handle, 'wait') else handle  # type: ignore
+            formatted_value = self.format_snmp_value(varbind_list[0])  # type: ignore
             self.results_text.configure(state='normal')
-            self.results_text.insert(tk.END, "Testing connection with sysDescr...\n")
+            self.results_text.insert(tk.END, f"Connection OK: {formatted_value}\n\n")
             self.results_text.configure(state='disabled')
             self.update_idletasks()
-
-            try:
-                handle = session.get('1.3.6.1.2.1.1.1.0')  # sysDescr - standard OID
-                varbind_list = handle.wait() if hasattr(handle, 'wait') else handle  # type: ignore
-                formatted_value = self.format_snmp_value(varbind_list[0])  # type: ignore
-                self.results_text.configure(state='normal')
-                self.results_text.insert(tk.END, f"Connection OK: {formatted_value}\n\n")
-                self.results_text.configure(state='disabled')
-                self.update_idletasks()
-            except (Timeout, ErrorResponse) as e:
-                self.results_text.configure(state='normal')
-                self.results_text.insert(tk.END, f"Connection test failed: {e}\n")
-                self.results_text.insert(tk.END, "Check your credentials and device accessibility.\n")
-                self.results_text.configure(state='disabled')
-                messagebox.showerror("Connection Error", f"Failed to connect to device:\n{e}")
-                return
-
         except (Timeout, ErrorResponse) as e:
-            messagebox.showerror("SNMP Error", str(e))
             self.results_text.configure(state='normal')
-            self.results_text.insert(tk.END, f"\nUnexpected error: {e}\n")
+            self.results_text.insert(tk.END, f"Connection test failed: {e}\n")
+            self.results_text.insert(tk.END, "Check your credentials and device accessibility.\n")
             self.results_text.configure(state='disabled')
+            messagebox.showerror("Connection Error", f"Failed to connect to device:\n{e}")
+            return
 
     def destroy_entry(self, delete_oid: str, entry_widget: ttk.Entry, button_widget: ttk.Button) -> None:
         """Destroy entry for the given oid and update given UI row."""
