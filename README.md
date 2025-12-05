@@ -5,7 +5,7 @@
 - tkinter
 - snmp
 
-Run the [install.sh](/install/install.sh) script to install all dependencies. 
+Run the [install.sh](/install/install.sh) script to install all dependencies and a desktop app icon.
 ```bash
 cd install
 ./install.sh
