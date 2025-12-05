@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import tkinter as tk
 from tkinter import messagebox, ttk
+from typing import Dict
 from snmp import Engine, Timeout, ErrorResponse
 from snmp.security.usm.auth import HmacMd5, HmacSha, HmacSha256, HmacSha512
 from snmp.security.usm.priv import DesCbc, AesCfb128
@@ -811,7 +812,7 @@ class RSUConfigurationApp(tk.Tk):
             print(f"ERROR getting RSU mode status: {e}")
             raise
 
-    def _set_rsu_mode(self, target:dict[str, int]) -> None:
+    def _set_rsu_mode(self, target: Dict[str, int]) -> None:
         """Set RSU to target mode with retry loop."""
         mode_oid = "1.3.6.1.4.1.1206.4.2.18.16.2.0"
         target_name = list(target.keys())[0]
