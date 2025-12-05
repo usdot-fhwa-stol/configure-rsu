@@ -816,7 +816,7 @@ class RSUConfigurationApp(tk.Tk):
             value_obj = varbind_list[0].value  # type: ignore
             mode_status = value_obj.value if hasattr(value_obj, 'value') else value_obj
             self.results_text.configure(state='normal')
-            self.results_text.insert(tk.END, f"RSU Mode Status: {status_modes.get(mode_status, 'unknown')}\n\n")
+            self.results_text.insert(tk.END, f"RSU Mode Status: {status_modes.get(mode_status, 'unknown')} ({mode_status})\n\n")
             self.results_text.configure(state='disabled')
             self.update_idletasks()
         except Exception as e:
