@@ -779,7 +779,7 @@ class RSUConfigurationApp(tk.Tk):
         ttk.Button(controls, text="Help", command=lambda: self.show_help("Store-and-Repeat", self.get_srm_help_content())).pack(side='left', padx=6)
 
     # Methods
-    def _set_rsu_mode(self, target_mode: int, mode_name: str, max_retries: int = 10) -> None:
+    def _set_rsu_mode(self, target_mode: int, mode_name: str, max_retries: int = 1) -> None:
         """Set RSU to target mode (2=standby, 3=operate) with retry loop."""
         import time
         mode_oid = "1.3.6.1.4.1.1206.4.2.18.16.2.0"
@@ -806,6 +806,7 @@ class RSUConfigurationApp(tk.Tk):
                 # Set the mode
                 try:
                     session.set((mode_oid, Integer32(target_mode)))
+                    time.sleep(10)  # Allow time for mode change
                 except Exception as set_error:
                     print(f"ERROR during SET: {set_error}")
                     print(f"SET error type: {type(set_error).__name__}")
