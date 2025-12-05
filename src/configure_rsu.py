@@ -783,6 +783,7 @@ class RSUConfigurationApp(tk.Tk):
         """Set RSU to target mode (2=standby, 3=operate) with retry loop."""
         import time
         mode_oid = "1.3.6.1.4.1.1206.4.2.18.16.2.0"
+        mode_oid_status = "1.3.6.1.4.1.1206.4.2.18.16.3.0"
         print(f"Setting RSU to {mode_name} mode...")
 
         for attempt in range(max_retries):
@@ -790,12 +791,17 @@ class RSUConfigurationApp(tk.Tk):
                 # Get session and check current mode
                 session = self.get_session()
                 handle = session.get(mode_oid)
+                handle_status = session.get(mode_oid_status)
                 varbind_list = handle.wait() if hasattr(handle, 'wait') else handle  # type: ignore
                 value_obj = varbind_list[0].value  # type: ignore
+                varbind_list_status = handle_status.wait() if hasattr(handle_status, 'wait') else handle_status  # type: ignore
+                value_obj_status = varbind_list_status[0].value  # type: ignore
                 current_mode = value_obj.value if hasattr(value_obj, 'value') else value_obj
+                current_status = value_obj_status.value if hasattr(value_obj_status, 'value') else value_obj_status
                 if current_mode == target_mode:
                     print(f"RSU already in {mode_name} mode.")
                     return
+                print(f"Current status: {current_status}")
 
                 # Set the mode
                 try:
