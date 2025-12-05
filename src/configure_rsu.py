@@ -802,6 +802,7 @@ class RSUConfigurationApp(tk.Tk):
     def _get_rsu_mode_status(self) -> None:
         """Outputs current RSU mode status."""
         mode_status_oid = "1.3.6.1.4.1.1206.4.2.18.16.3.0"
+        status_modes = {1: "other", 2: "standby", 3: "operate", 4: "fault"}
 
         self.results_text.configure(state='normal')
         self.results_text.insert(tk.END, "Getting RSU mode status...\n")
@@ -815,7 +816,7 @@ class RSUConfigurationApp(tk.Tk):
             value_obj = varbind_list[0].value  # type: ignore
             mode_status = value_obj.value if hasattr(value_obj, 'value') else value_obj
             self.results_text.configure(state='normal')
-            self.results_text.insert(tk.END, f"RSU Mode Status: {mode_status}\n\n")
+            self.results_text.insert(tk.END, f"RSU Mode Status: {status_modes.get(mode_status, 'unknown')}\n\n")
             self.results_text.configure(state='disabled')
             self.update_idletasks()
         except Exception as e:
