@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import tkinter as tk
 from tkinter import messagebox, ttk
+from typing import Dict
 from snmp import Engine, Timeout, ErrorResponse
 from snmp.security.usm.auth import HmacMd5, HmacSha, HmacSha256, HmacSha512
 from snmp.security.usm.priv import DesCbc, AesCfb128
@@ -87,8 +88,9 @@ class RSUConfigurationApp(tk.Tk):
         button_frame = ttk.Frame(body)
         button_frame.grid(row=r, column=0, columnspan=4, sticky='ew', padx=6, pady=6)
         ttk.Button(button_frame, text="Test Connection", command=self.test_connection).pack(side='left', padx=6)
-        ttk.Button(button_frame, text="Help", command=lambda: self.show_help("SNMP Credentials", "")).pack(side='left', padx=6)
+        ttk.Button(button_frame, text="Get RSU Mode Status", command=self._get_rsu_mode_status).pack(side='left', padx=6)
         ttk.Button(button_frame, text="Quit", command=self.quit).pack(side='right', padx=6)
+        ttk.Button(button_frame, text="Help", command=lambda: self.show_help("SNMP Credentials", "")).pack(side='right', padx=6)
 
         # Label + read-only text widget to show results
         r += 1
@@ -779,68 +781,91 @@ class RSUConfigurationApp(tk.Tk):
         ttk.Button(controls, text="Help", command=lambda: self.show_help("Store-and-Repeat", self.get_srm_help_content())).pack(side='left', padx=6)
 
     # Methods
-    def _set_rsu_mode(self, target_mode: int, mode_name: str, max_retries: int = 1) -> None:
-        """Set RSU to target mode (2=standby, 3=operate) with retry loop."""
-        import time
+    def _get_rsu_mode(self) -> int:
+        """Get RSU mode.
+
+        Returns:
+            int: Current RSU mode value. 1=other, 2=standby, 3=operate
+        """
         mode_oid = "1.3.6.1.4.1.1206.4.2.18.16.2.0"
-        mode_oid_status = "1.3.6.1.4.1.1206.4.2.18.16.3.0"
-        print(f"Setting RSU to {mode_name} mode...")
+        try:
+            session = self.get_session()
+            handle = session.get(mode_oid)
+            varbind_list = handle.wait() if hasattr(handle, 'wait') else handle  # type: ignore
+            value_obj = varbind_list[0].value  # type: ignore
+            current_mode = value_obj.value if hasattr(value_obj, 'value') else value_obj
+            return current_mode
+        except Exception as e:
+            print(f"ERROR getting RSU mode: {e}")
+            raise
 
-        for attempt in range(max_retries):
+    def _get_rsu_mode_status(self) -> None:
+        """Outputs current RSU mode status."""
+        mode_status_oid = "1.3.6.1.4.1.1206.4.2.18.16.3.0"
+        status_modes = {1: "other", 2: "standby", 3: "operate", 4: "fault"}
+
+        try:
+            session = self.get_session()
+            handle = session.get(mode_status_oid)
+            varbind_list = handle.wait() if hasattr(handle, 'wait') else handle  # type: ignore
+            value_obj = varbind_list[0].value  # type: ignore
+            mode_status = value_obj.value if hasattr(value_obj, 'value') else value_obj
+            self.results_text.configure(state='normal')
+            self.results_text.insert(tk.END, f"RSU Mode Status: {status_modes.get(mode_status, 'unknown')} ({mode_status})\n\n")
+            self.results_text.configure(state='disabled')
+            self.update_idletasks()
+        except Exception as e:
+            self.results_text.configure(state='normal')
+            self.results_text.insert(tk.END, f"ERROR getting RSU mode status: {e}\n\n")
+            self.results_text.configure(state='disabled')
+            self.update_idletasks()
+            raise
+
+    def _set_rsu_mode(self, target: Dict[str, int]) -> None:
+        """Set RSU to target mode with retry loop."""
+        mode_oid = "1.3.6.1.4.1.1206.4.2.18.16.2.0"
+        target_name = list(target.keys())[0]
+        target_mode = list(target.values())[0]
+        print(f"Setting RSU to {target_name} mode...")
+
+        try:
+            # Check current mode
+            current_mode = self._get_rsu_mode()
+            if current_mode == target_mode:
+                print(f"RSU is already in {target_name} mode.")
+                return
+
+            # Set the mode
+            session = self.get_session()
+            response = session.set((mode_oid, Integer32(target_mode)))
+            print(f"Set response: {response}")
+            
+            # If no exception was raised, the set operation succeeded
+            # The response contains variable bindings confirming the set operation
+            print(f"Successfully set RSU to {target_name} mode.")
+            
+            # Optionally verify by reading back the mode
             try:
-                # Get session and check current mode
-                session = self.get_session()
-                handle = session.get(mode_oid)
-                handle_status = session.get(mode_oid_status)
-                varbind_list = handle.wait() if hasattr(handle, 'wait') else handle  # type: ignore
-                value_obj = varbind_list[0].value  # type: ignore
-                varbind_list_status = handle_status.wait() if hasattr(handle_status, 'wait') else handle_status  # type: ignore
-                value_obj_status = varbind_list_status[0].value  # type: ignore
-                current_mode = value_obj.value if hasattr(value_obj, 'value') else value_obj
-                current_status = value_obj_status.value if hasattr(value_obj_status, 'value') else value_obj_status
-                if current_mode == target_mode:
-                    print(f"RSU already in {mode_name} mode.")
-                    return
-                print(f"Current status: {current_status}")
+                verified_mode = self._get_rsu_mode()
+                if verified_mode != target_mode:
+                    print(f"Warning: Mode verification failed. Expected {target_mode}, got {verified_mode}")
+            except Exception as verify_error:
+                print(f"Note: Could not verify mode change: {verify_error}")
 
-                # Set the mode
-                try:
-                    session.set((mode_oid, Integer32(target_mode)))
-                    time.sleep(10)  # Allow time for mode change
-                except Exception as set_error:
-                    print(f"ERROR during SET: {set_error}")
-                    print(f"SET error type: {type(set_error).__name__}")
-                    raise
-
-                # Verify the mode change
-                handle = session.get(mode_oid)
-                varbind_list = handle.wait() if hasattr(handle, 'wait') else handle  # type: ignore
-                value_obj = varbind_list[0].value  # type: ignore
-                current_mode = value_obj.value if hasattr(value_obj, 'value') else value_obj
-                if current_mode == target_mode:
-                    print(f"RSU successfully set to {mode_name} mode.")
-                    return
-                else:
-                    print(f"Warning: Mode is {current_mode} but expected {target_mode}, retrying...")
-
-            except (Timeout, ErrorResponse) as e:
-                print(f"SNMP Exception caught: {type(e).__name__}: {e}")
-                if attempt == max_retries - 1:
-                    raise Exception(f"Failed to set RSU to {mode_name} mode after {max_retries} attempts: {e}")
-                print(f"Retrying (attempt {attempt + 1}/{max_retries})...")
-                time.sleep(1)
-            except Exception as e:
-                print(f"Unexpected exception: {type(e).__name__}: {e}")
-                raise
+        except (Timeout, ErrorResponse) as e:
+            print(f"SNMP error setting RSU mode: {type(e).__name__}: {e}")
+            raise
+        except Exception as e:
+            print(f"Error setting RSU mode: {type(e).__name__}: {e}")
+            raise
 
     def _set_standby(self) -> None:
         """Set RSU to standby mode (2)."""
-        self._set_rsu_mode(2, "standby")
+        self._set_rsu_mode({"standby": 2})
 
     def _set_operate(self) -> None:
         """Set RSU to operate mode (3)."""
-        self._set_rsu_mode(3, "operate")
-
+        self._set_rsu_mode({"operate": 3})
     def show_help(self, tab_name: str, content: str) -> None:
         """Show a help window for the given tab."""
         help_window = tk.Toplevel(self)
@@ -1036,34 +1061,20 @@ Options: Bit-mapped options (BITS, hex):
         """Test SNMP connection by performing a simple GET operation."""
         try:
             session = self.get_session()
-
-            # Try a simple GET to verify connection and permissions
+            handle = session.get('1.3.6.1.2.1.1.1.0')  # sysDescr - standard OID
+            varbind_list = handle.wait() if hasattr(handle, 'wait') else handle  # type: ignore
+            formatted_value = self.format_snmp_value(varbind_list[0])  # type: ignore
             self.results_text.configure(state='normal')
-            self.results_text.insert(tk.END, "Testing connection with sysDescr...\n")
+            self.results_text.insert(tk.END, f"Connection OK: {formatted_value}\n\n")
             self.results_text.configure(state='disabled')
             self.update_idletasks()
-
-            try:
-                handle = session.get('1.3.6.1.2.1.1.1.0')  # sysDescr - standard OID
-                varbind_list = handle.wait() if hasattr(handle, 'wait') else handle  # type: ignore
-                formatted_value = self.format_snmp_value(varbind_list[0])  # type: ignore
-                self.results_text.configure(state='normal')
-                self.results_text.insert(tk.END, f"Connection OK: {formatted_value}\n\n")
-                self.results_text.configure(state='disabled')
-                self.update_idletasks()
-            except (Timeout, ErrorResponse) as e:
-                self.results_text.configure(state='normal')
-                self.results_text.insert(tk.END, f"Connection test failed: {e}\n")
-                self.results_text.insert(tk.END, "Check your credentials and device accessibility.\n")
-                self.results_text.configure(state='disabled')
-                messagebox.showerror("Connection Error", f"Failed to connect to device:\n{e}")
-                return
-
         except (Timeout, ErrorResponse) as e:
-            messagebox.showerror("SNMP Error", str(e))
             self.results_text.configure(state='normal')
-            self.results_text.insert(tk.END, f"\nUnexpected error: {e}\n")
+            self.results_text.insert(tk.END, f"Connection test failed: {e}\n")
+            self.results_text.insert(tk.END, "Check your credentials and device accessibility.\n")
             self.results_text.configure(state='disabled')
+            messagebox.showerror("Connection Error", f"Failed to connect to device:\n{e}")
+            return
 
     def destroy_entry(self, delete_oid: str, entry_widget: ttk.Entry, button_widget: ttk.Button) -> None:
         """Destroy entry for the given oid and update given UI row."""
