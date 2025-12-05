@@ -26,7 +26,7 @@ class RSUConfigurationApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("RSU Configuration")
-        self.geometry("640x480")
+        self.geometry("900x700")
         self.resizable(True, True)
 
         # Create notebook for tabs
