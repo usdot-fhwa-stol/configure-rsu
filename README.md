@@ -11,17 +11,17 @@ cd install
 ./install.sh
 ```
 
-The install script will create a .env file in the [src](/src/) directory. You may update this file to contain your RSU's credentials, if repeated access will be needed.
+The install script will:
+ - Create a .env file in the [src](/src/) directory. You may update this file to contain your RSU's credentials, if repeated access will be needed.
+ - Create a desktop app on your Desktop. Right-click on the RSU icon and select "Allow Launching" to be able to run the App.
 
 ## Usage
 
 The UI for this tool contains four separate tabs. Each tab is used for specific RSU configurations. The initial SNMP credentials configuration must be set before continuing to use the other three tabs. 
 
-1. Execute the script:
-```bash
-cd src
-./configure-rsu.py
-```
+1. Run the application:
+    - Double-click on the desktop app icon. 
+
 2. SNMP Configuration
     - Set and test your SNMP user credentials in this tab. 
     - An exit/quit option is also available here.

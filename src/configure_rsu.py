@@ -16,6 +16,8 @@ load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env'))
 snmp_engine = Engine()
 
 # Load SNMP credentials from environment variables
+IP_ADDRESS = os.getenv('IP_ADDRESS')
+SNMP_PORT = int(os.getenv('SNMP_PORT', 161))
 SNMP_USER = os.getenv('SNMP_USER')
 AUTH_PASSWORD = os.getenv('AUTH_PASSWORD')
 PRIV_PASSWORD = os.getenv('PRIV_PASSWORD')
@@ -49,11 +51,11 @@ class RSUConfigurationApp(tk.Tk):
         # SNMP session input fields
         r = 0
         ttk.Label(body, text="RSU IP Address:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
-        self.hostname_var = tk.StringVar(value="192.168.55.20")
+        self.hostname_var = tk.StringVar(value=IP_ADDRESS if IP_ADDRESS else "192.168.55.20")
         ttk.Entry(body, textvariable=self.hostname_var).grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
         r += 1
         ttk.Label(body, text="RSU SNMP Port:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
-        self.port_var = tk.IntVar(value=161)
+        self.port_var = tk.IntVar(value=SNMP_PORT if SNMP_PORT else 161)
         ttk.Entry(body, textvariable=self.port_var).grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
         r += 1
         ttk.Label(body, text="SNMPv3 Username:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
