@@ -88,8 +88,9 @@ class RSUConfigurationApp(tk.Tk):
         button_frame = ttk.Frame(body)
         button_frame.grid(row=r, column=0, columnspan=4, sticky='ew', padx=6, pady=6)
         ttk.Button(button_frame, text="Test Connection", command=self.test_connection).pack(side='left', padx=6)
-        ttk.Button(button_frame, text="Help", command=lambda: self.show_help("SNMP Credentials", "")).pack(side='left', padx=6)
+        ttk.Button(button_frame, text="Get RSU Mode Status", command=self._get_rsu_mode_status).pack(side='left', padx=6)
         ttk.Button(button_frame, text="Quit", command=self.quit).pack(side='right', padx=6)
+        ttk.Button(button_frame, text="Help", command=lambda: self.show_help("SNMP Credentials", "")).pack(side='right', padx=6)
 
         # Label + read-only text widget to show results
         r += 1
@@ -782,7 +783,7 @@ class RSUConfigurationApp(tk.Tk):
     # Methods
     def _get_rsu_mode(self) -> int:
         """Get RSU mode.
-        
+
         Returns:
             int: Current RSU mode value. 1=other, 2=standby, 3=operate
         """
@@ -797,19 +798,31 @@ class RSUConfigurationApp(tk.Tk):
         except Exception as e:
             print(f"ERROR getting RSU mode: {e}")
             raise
-        
+
     def _get_rsu_mode_status(self) -> None:
-        """Get RSU mode status."""
+        """Outputs current RSU mode status."""
         mode_status_oid = "1.3.6.1.4.1.1206.4.2.18.16.3.0"
+
+        self.results_text.configure(state='normal')
+        self.results_text.insert(tk.END, "Getting RSU mode status...\n")
+        self.results_text.configure(state='disabled')
+        self.update_idletasks()
+
         try:
             session = self.get_session()
             handle = session.get(mode_status_oid)
             varbind_list = handle.wait() if hasattr(handle, 'wait') else handle  # type: ignore
             value_obj = varbind_list[0].value  # type: ignore
             mode_status = value_obj.value if hasattr(value_obj, 'value') else value_obj
-            print(f"Current RSU mode status: {mode_status}")
+            self.results_text.configure(state='normal')
+            self.results_text.insert(tk.END, f"RSU Mode Status: {mode_status}\n\n")
+            self.results_text.configure(state='disabled')
+            self.update_idletasks()
         except Exception as e:
-            print(f"ERROR getting RSU mode status: {e}")
+            self.results_text.configure(state='normal')
+            self.results_text.insert(tk.END, f"ERROR getting RSU mode status: {e}\n\n")
+            self.results_text.configure(state='disabled')
+            self.update_idletasks()
             raise
 
     def _set_rsu_mode(self, target: Dict[str, int]) -> None:
