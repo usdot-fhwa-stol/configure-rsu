@@ -82,3 +82,187 @@ def convert_snmp_datetime_to_string(date_bytes: bytes) -> str:
     except Exception:
         # If conversion fails, return as hex string
         return ' '.join(f'{b:02x}' for b in date_bytes)
+
+def format_snmp_value(varbind) -> str:
+    """Format SNMP VarBind value, converting binary data to hex string if needed, and 8-byte octet strings to datetime."""
+    # varbind has .value attribute which is an snmp.smi.ObjectSyntax object
+    value = varbind.value
+
+    # Handle INTEGER32 types
+    if hasattr(value, 'value') and isinstance(value.value, int):
+        return str(value.value)
+
+    # Handle different value types from snmp library
+    if hasattr(value, 'data'):  # OctetString type
+        data = value.data
+        if isinstance(data, bytes):
+            # Check if this is an 8-byte DateAndTime value
+            if len(data) == 8:
+                # Try to convert to datetime string
+                datetime_str = convert_snmp_datetime_to_string(data)
+                # Only return as datetime if it looks valid (not all hex)
+                if ',' in datetime_str and '-' in datetime_str:
+                    return datetime_str
+
+            # Try to decode as UTF-8 string first
+            try:
+                decoded_str = data.decode('utf-8')
+                # If it's printable, return as string
+                if all(32 <= ord(c) <= 126 or c in '\t\n\r' for c in decoded_str):
+                    return decoded_str
+            except (UnicodeDecodeError, AttributeError):
+                pass
+
+            # Return as hex string if not printable
+            return ' '.join(f'{b:02x}' for b in data)
+        elif isinstance(data, str):
+            return data
+        return str(data)
+    elif isinstance(value, bytes):
+        # Check if this is an 8-byte DateAndTime value
+        if len(value) == 8:
+            datetime_str = convert_snmp_datetime_to_string(value)
+            if ',' in datetime_str and '-' in datetime_str:
+                return datetime_str
+
+        # Try to decode as UTF-8 string first
+        try:
+            decoded_str = value.decode('utf-8')
+            # If it's printable, return as string
+            if all(32 <= ord(c) <= 126 or c in '\t\n\r' for c in decoded_str):
+                return decoded_str
+        except (UnicodeDecodeError, AttributeError):
+            pass
+
+        return ' '.join(f'{b:02x}' for b in value)
+    elif isinstance(value, str):
+        # Check if string contains non-printable characters
+        if any(ord(c) < 32 or ord(c) > 126 for c in value):
+            # Convert to hex
+            return ' '.join(f'{ord(c):02x}' for c in value)
+        return value
+    elif isinstance(value, int):
+        return str(value)
+
+    return str(value)
+
+def get_ifm_help_content() -> str:
+        """Return help content for Immediate Forward tab."""
+        return """Immediate Forward Messages (IFM) Configuration Help
+
+=== IFM Entry Fields ===
+For more information on each field, refer to the RSU SNMP MIB documentation section 5.5 Immediate Forward Messages.
+https://www.ntcip.org/file/2025/01/NTCIP-1218-v01A-2024-AsPublished.pdf
+
+PSID: Provider Service Identifier (hex value)
+      Identifies the type of message being transmitted.
+
+Channel: Transmission channel number (typically 172-184)
+         The radio channel on which the message will be broadcast.
+
+Enable: 0 = Disabled, 1 = Enabled
+        Controls whether this IFM entry is active.
+
+Priority: Message priority (0-63, higher is more important)
+          Determines transmission priority when multiple messages compete.
+
+Payload: Hex value containing the message data to be transmitted.
+
+
+Options: Bit-mapped options (BITS, hex):
+    Bit 0: 0=Bypass1609.2, 1=Process1609.2
+    Bit 1: 0=Secure,       1=Unsecure
+    Bit 2: 0=ContXmit,     1=NoXmitShortTermXceeded
+    Bit 3: 0=ContXmit,     1=NoXmitLongTermXceeded
+"""
+
+def get_rfm_help_content() -> str:
+        """Return help content for Received Message Forward tab."""
+        return """Received Message Forward (RFM) Configuration Help
+
+=== RFM Entry Fields ===
+For more information on each field, refer to the RSU SNMP MIB documentation section 5.6 Received Messages.
+https://www.ntcip.org/file/2025/01/NTCIP-1218-v01A-2024-AsPublished.pdf
+
+PSID: Provider Service Identifier (hex value)
+      Identifies the type of message to forward when received.
+
+Destination IP: IP address where received messages will be forwarded.
+                The IP address of the destination system.
+
+Destination Port: Port number for forwarding.
+                  The port on the destination system.
+
+Protocol: Transport protocol for forwarding
+          1 = Other (A SET to a value of 'other' shall return a badValue error.)
+          2 = UDP (User Datagram Protocol)
+
+RSSI: Received Signal Strength Indicator threshold (dBm)
+      Minimum signal strength required to forward message.
+      Typical value: -100 (dBm)
+
+Interval: Forwarding interval in deciseconds (1/10 second)
+          Controls how often messages are forwarded.
+          1 = 100ms, 10 = 1 second
+
+Start Date: Message forwarding start date/time
+            Format: yyyy-mm-dd,hh:mm:ss.ms
+            Example: 2025-01-01,00:00:00.0
+            This is converted to SNMP DateAndTime format (8 octets)
+            Example: 2025-01-01,00:00:00.0 becomes 07 E9 01 01 00 00 00 00
+
+Stop Date: Message forwarding stop date/time
+           Format: yyyy-mm-dd,hh:mm:ss.ms
+           Example: 2030-01-01,00:00:00.0
+           This is converted to SNMP DateAndTime format (8 octets)
+
+Secure: Security requirement for forwarded messages
+        0 = Accept both secure and unsecure messages
+        1 = Accept only secure messages
+
+Auth Msg Interval: Authentication message interval in deciseconds
+                   0 = No authentication messages
+"""
+
+def get_srm_help_content() -> str:
+        """Return help content for Store and Repeat Messages tab."""
+        return """Store and Repeat Messages (SRM) Configuration Help
+
+=== SRM Entry Fields ===
+For more information on each field, refer to the RSU SNMP MIB documentation section 5.4 Store and Repeat Messages.
+https://www.ntcip.org/file/2025/01/NTCIP-1218-v01A-2024-AsPublished.pdf
+
+PSID: Provider Service Identifier (hex value)
+      Identifies the message type to store and repeat.
+
+TX Channel: Transmission channel number (typically 172-184)
+            The radio channel used when repeating the message.
+
+TX Interval: Transmission interval in milliseconds
+             How often the stored message is repeated. (rsuMsgRepeatTxInterval)
+
+Start Date: Message forwarding start date/time
+            Format: yyyy-mm-dd,hh:mm:ss.ms
+            Example: 2025-01-01,00:00:00.0
+            This is converted to SNMP DateAndTime format (8 octets)
+            Example: 2025-01-01,00:00:00.0 becomes 07 E9 01 01 00 00 00 00
+
+Stop Date: Message forwarding stop date/time
+           Format: yyyy-mm-dd,hh:mm:ss.ms
+           Example: 2030-01-01,00:00:00.0
+           This is converted to SNMP DateAndTime format (8 octets)
+
+Payload: Hex value containing the message data to be transmitted.
+
+Enable: 0 = Disabled, 1 = Enabled
+        Controls whether this SRM entry is active (rsuMsgRepeatEnable).
+
+Priority: Message priority (0-63, higher is more important)
+          Determines transmission priority when multiple messages compete.
+
+Options: Bit-mapped options (BITS, hex):
+    Bit 0: 0=Bypass1609.2, 1=Process1609.2
+    Bit 1: 0=Secure,       1=Unsecure
+    Bit 2: 0=ContXmit,     1=NoXmitShortTermXceeded
+    Bit 3: 0=ContXmit,     1=NoXmitLongTermXceeded
+"""
