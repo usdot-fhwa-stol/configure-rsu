@@ -197,7 +197,7 @@ class RSUConfigurationApp(tk.Tk):
                 'enable': tk.IntVar(value=1),
                 'priority': tk.IntVar(value=5),
                 'options': tk.StringVar(value='00'),
-                'payload': tk.StringVar(value='FE'),
+                'payload': tk.StringVar(value=''),
                 'frame': entry_frame,
                 'index': idx_val
             }
@@ -701,7 +701,7 @@ class RSUConfigurationApp(tk.Tk):
                 'interval': tk.IntVar(value=1000),
                 'start_date': tk.StringVar(value='2025-01-01,00:00:00.0'),
                 'stop_date': tk.StringVar(value='2030-01-01,00:00:00.0'),
-                'payload': tk.StringVar(value='FF'),
+                'payload': tk.StringVar(value=''),
                 'enable': tk.IntVar(value=1),
                 'priority': tk.IntVar(value=6),
                 'options': tk.StringVar(value='01'),

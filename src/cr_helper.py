@@ -147,8 +147,8 @@ def format_snmp_value(varbind) -> str:
     return str(value)
 
 def get_ifm_help_content() -> str:
-        """Return help content for Immediate Forward tab."""
-        return """Immediate Forward Messages (IFM) Configuration Help
+    """Return help content for Immediate Forward tab."""
+    return """Immediate Forward Messages (IFM) Configuration Help
 
 === IFM Entry Fields ===
 For more information on each field, refer to the RSU SNMP MIB documentation section 5.5 Immediate Forward Messages.
@@ -177,8 +177,8 @@ Options: Bit-mapped options (BITS, hex):
 """
 
 def get_rfm_help_content() -> str:
-        """Return help content for Received Message Forward tab."""
-        return """Received Message Forward (RFM) Configuration Help
+    """Return help content for Received Message Forward tab."""
+    return """Received Message Forward (RFM) Configuration Help
 
 === RFM Entry Fields ===
 For more information on each field, refer to the RSU SNMP MIB documentation section 5.6 Received Messages.
@@ -225,8 +225,8 @@ Auth Msg Interval: Authentication message interval in deciseconds
 """
 
 def get_srm_help_content() -> str:
-        """Return help content for Store and Repeat Messages tab."""
-        return """Store and Repeat Messages (SRM) Configuration Help
+    """Return help content for Store and Repeat Messages tab."""
+    return """Store and Repeat Messages (SRM) Configuration Help
 
 === SRM Entry Fields ===
 For more information on each field, refer to the RSU SNMP MIB documentation section 5.4 Store and Repeat Messages.
