@@ -87,10 +87,10 @@ class RSUConfigurationApp(tk.Tk):
         r += 1
         button_frame = ttk.Frame(body)
         button_frame.grid(row=r, column=0, columnspan=4, sticky='ew', padx=6, pady=6)
-        ttk.Button(button_frame, text="Test Connection", command=self.test_connection).pack(side='left', padx=6)
+        ttk.Button(button_frame, text="Test Connection", command=self._test_connection).pack(side='left', padx=6)
         ttk.Button(button_frame, text="Get RSU Mode Status", command=self._get_rsu_mode_status).pack(side='left', padx=6)
         ttk.Button(button_frame, text="Quit", command=self.quit).pack(side='right', padx=6)
-        ttk.Button(button_frame, text="Help", command=lambda: self.show_help("SNMP Credentials", "")).pack(side='right', padx=6)
+        ttk.Button(button_frame, text="Help", command=lambda: self._show_help("SNMP Credentials", "")).pack(side='right', padx=6)
 
         # Label + read-only text widget to show results
         r += 1
@@ -150,7 +150,7 @@ class RSUConfigurationApp(tk.Tk):
 
                 # Configure the entry using SET operations
                 print(f"Configuring IFM entry {ifm_index}")
-                session = self.get_session()
+                session = self._get_session()
                 base_oid = f"1.3.6.1.4.1.1206.4.2.18.4.2.1"
                 session.set(
                     (f"{base_oid}.2.{ifm_index}", OctetString(unhexlify(psid))),      # rsuIFMPsid (octet string as hex)
@@ -260,11 +260,9 @@ class RSUConfigurationApp(tk.Tk):
         def destroy_ifm_entry(idx: int, entry_widget: ttk.Entry, button_widget: ttk.Button) -> None:
             """Destroy IFM entry for the given index and update given UI row."""
             delete_ifm_oid = f"1.3.6.1.4.1.1206.4.2.18.4.2.1.5.{idx}"
-            # RSU must be in standby mode to accept configuration changes
-            self._set_standby()
-            self.destroy_entry(delete_ifm_oid, entry_widget, button_widget)
-            # Return RSU to operate mode
-            self._set_operate()
+            self._destroy_entry(delete_ifm_oid, entry_widget, button_widget)
+            # Refresh entries by running get operation
+            get_ifm_info()
 
         def get_ifm_info() -> None:
             """Fetch IFM info and render each result as a read-only row with a Destroy button."""
@@ -275,14 +273,14 @@ class RSUConfigurationApp(tk.Tk):
             add_ifm_btn.configure(state='normal')
 
 
-            session = self.get_session()
+            session = self._get_session()
             current_row = 0
             for i in range(1, 7):
                 get_oid = f"1.3.6.1.4.1.1206.4.2.18.4.2.1.2.{i}"
                 try:
                     handle = session.get(get_oid)
                     varbind_list = handle.wait() if hasattr(handle, 'wait') else handle  # type: ignore
-                    formatted_value = self.format_snmp_value(varbind_list[0])  # type: ignore
+                    formatted_value = cr_helper.format_snmp_value(varbind_list[0])  # type: ignore
                     text = f"IFM Index {i}: {formatted_value}"
                     var = tk.StringVar(value=text)
                     entry = ttk.Entry(rows_frame, textvariable=var, state='readonly')
@@ -309,7 +307,7 @@ class RSUConfigurationApp(tk.Tk):
         add_ifm_btn = ttk.Button(controls, text="Add IFM Entry", command=add_ifm_entry, state='disabled')
         add_ifm_btn.pack(side='left', padx=6)
         ttk.Button(controls, text="Get IFM Info", command=get_ifm_info).pack(side='left', padx=6)
-        ttk.Button(controls, text="Help", command=lambda: self.show_help("Immediate Forward", self.get_ifm_help_content())).pack(side='left', padx=6)
+        ttk.Button(controls, text="Help", command=lambda: self._show_help("Immediate Forward", cr_helper.get_ifm_help_content())).pack(side='left', padx=6)
 
     def create_received_message_forward_tab(self, notebook):
         """Create the Received Message Forward tab"""
@@ -373,7 +371,7 @@ class RSUConfigurationApp(tk.Tk):
 
                 # Configure the entry using SET operations
                 print(f"Configuring RFM entry {rfm_index}")
-                session = self.get_session()
+                session = self._get_session()
                 base_oid = f"1.3.6.1.4.1.1206.4.2.18.5.2.1"
                 session.set(
                     (f"{base_oid}.2.{rfm_index}", OctetString(unhexlify(psid))),        # rsuReceivedMsgPsid (hex)
@@ -502,7 +500,9 @@ class RSUConfigurationApp(tk.Tk):
         def destroy_rfm_entry(idx: int, entry_widget: ttk.Entry, button_widget: ttk.Button) -> None:
             """Destroy RFM entry for the given index and update given UI row."""
             delete_rfm_oid = f"1.3.6.1.4.1.1206.4.2.18.5.2.1.10.{idx}"
-            self.destroy_entry(delete_rfm_oid, entry_widget, button_widget)
+            self._destroy_entry(delete_rfm_oid, entry_widget, button_widget)
+            # Refresh entries by running get operation
+            get_rfm_info()
 
         def get_rfm_info() -> None:
             """Fetch RFM info and render each result as a read-only row with a Destroy button."""
@@ -512,7 +512,7 @@ class RSUConfigurationApp(tk.Tk):
             # Enable the "Add RFM Entry" button after first Get
             add_rfm_btn.configure(state='normal')
 
-            session = self.get_session()
+            session = self._get_session()
             current_row = 0
             for i in range(1, 7):
                 for j in range(2, 5):
@@ -520,7 +520,7 @@ class RSUConfigurationApp(tk.Tk):
                     try:
                         handle = session.get(get_oid)
                         varbind_list = handle.wait() if hasattr(handle, 'wait') else handle  # type: ignore
-                        formatted_value = self.format_snmp_value(varbind_list[0])  # type: ignore
+                        formatted_value = cr_helper.format_snmp_value(varbind_list[0])  # type: ignore
                         text = f"RFM Index {i}: {formatted_value}"
                         var = tk.StringVar(value=text)
                         entry = ttk.Entry(rows_frame, textvariable=var, state='readonly')
@@ -546,7 +546,7 @@ class RSUConfigurationApp(tk.Tk):
         add_rfm_btn = ttk.Button(controls, text="Add RFM Entry", command=add_rfm_entry, state='disabled')
         add_rfm_btn.pack(side='left', padx=6)
         ttk.Button(controls, text="Get RFM Info", command=get_rfm_info).pack(side='left', padx=6)
-        ttk.Button(controls, text="Help", command=lambda: self.show_help("Received Message Forward", self.get_rfm_help_content())).pack(side='left', padx=6)
+        ttk.Button(controls, text="Help", command=lambda: self._show_help("Received Message Forward", cr_helper.get_rfm_help_content())).pack(side='left', padx=6)
 
     def create_store_and_repeat_tab(self, notebook):
         """Create the Store-and-Repeat tab"""
@@ -577,7 +577,9 @@ class RSUConfigurationApp(tk.Tk):
         def destroy_srm_entry(idx: int, entry_widget: ttk.Entry, button_widget: ttk.Button) -> None:
             """Destroy SRM entry for the given index and update given UI row."""
             delete_srm_oid = f"1.3.6.1.4.1.1206.4.2.18.3.2.1.9.{idx}"
-            self.destroy_entry(delete_srm_oid, entry_widget, button_widget)
+            self._destroy_entry(delete_srm_oid, entry_widget, button_widget)
+            # Refresh entries by running get operation
+            get_srm_info()
 
         def get_srm_info() -> None:
             """Fetch SRM info and render each result as a read-only row with a Destroy button."""
@@ -587,7 +589,7 @@ class RSUConfigurationApp(tk.Tk):
             # Enable the "Add SRM Entry" button after first Get
             add_srm_btn.configure(state='normal')
 
-            session = self.get_session()
+            session = self._get_session()
             current_row = 0
             for i in range(1, 7):
                 for j in range(2, 8, 5): # get entries 2 and 7 (psid and payload)
@@ -595,7 +597,7 @@ class RSUConfigurationApp(tk.Tk):
                     try:
                         handle = session.get(get_oid)
                         varbind_list = handle.wait() if hasattr(handle, 'wait') else handle  # type: ignore
-                        formatted_value = self.format_snmp_value(varbind_list[0])  # type: ignore
+                        formatted_value = cr_helper.format_snmp_value(varbind_list[0])  # type: ignore
                         text = f"SRM Index {i}: {formatted_value}"
                         var = tk.StringVar(value=text)
                         entry = ttk.Entry(rows_frame, textvariable=var, state='readonly')
@@ -652,7 +654,7 @@ class RSUConfigurationApp(tk.Tk):
 
                 # Configure the entry using SET operations
                 print(f"Configuring SRM entry {srm_index}")
-                session = self.get_session()
+                session = self._get_session()
                 base_oid = f"1.3.6.1.4.1.1206.4.2.18.3.2.1"
                 session.set(
                     (f"{base_oid}.2.{srm_index}", OctetString(unhexlify(psid))),        # rsuMsgRepeatPsid (hex)
@@ -778,7 +780,7 @@ class RSUConfigurationApp(tk.Tk):
         add_srm_btn = ttk.Button(controls, text="Add SRM Entry", command=add_srm_entry, state='disabled')
         add_srm_btn.pack(side='left', padx=6)
         ttk.Button(controls, text="Get SRM Info", command=get_srm_info).pack(side='left', padx=6)
-        ttk.Button(controls, text="Help", command=lambda: self.show_help("Store-and-Repeat", self.get_srm_help_content())).pack(side='left', padx=6)
+        ttk.Button(controls, text="Help", command=lambda: self._show_help("Store-and-Repeat", cr_helper.get_srm_help_content())).pack(side='left', padx=6)
 
     # Methods
     def _get_rsu_mode(self) -> int:
@@ -789,7 +791,7 @@ class RSUConfigurationApp(tk.Tk):
         """
         mode_oid = "1.3.6.1.4.1.1206.4.2.18.16.2.0"
         try:
-            session = self.get_session()
+            session = self._get_session()
             handle = session.get(mode_oid)
             varbind_list = handle.wait() if hasattr(handle, 'wait') else handle  # type: ignore
             value_obj = varbind_list[0].value  # type: ignore
@@ -805,7 +807,7 @@ class RSUConfigurationApp(tk.Tk):
         status_modes = {1: "other", 2: "standby", 3: "operate", 4: "fault"}
 
         try:
-            session = self.get_session()
+            session = self._get_session()
             handle = session.get(mode_status_oid)
             varbind_list = handle.wait() if hasattr(handle, 'wait') else handle  # type: ignore
             value_obj = varbind_list[0].value  # type: ignore
@@ -822,7 +824,7 @@ class RSUConfigurationApp(tk.Tk):
             raise
 
     def _set_rsu_mode(self, target: Dict[str, int]) -> None:
-        """Set RSU to target mode with retry loop."""
+        """Set RSU to target mode."""
         mode_oid = "1.3.6.1.4.1.1206.4.2.18.16.2.0"
         target_name = list(target.keys())[0]
         target_mode = list(target.values())[0]
@@ -836,14 +838,14 @@ class RSUConfigurationApp(tk.Tk):
                 return
 
             # Set the mode
-            session = self.get_session()
+            session = self._get_session()
             response = session.set((mode_oid, Integer32(target_mode)))
             print(f"Set response: {response}")
-            
+
             # If no exception was raised, the set operation succeeded
             # The response contains variable bindings confirming the set operation
             print(f"Successfully set RSU to {target_name} mode.")
-            
+
             # Optionally verify by reading back the mode
             try:
                 verified_mode = self._get_rsu_mode()
@@ -866,7 +868,8 @@ class RSUConfigurationApp(tk.Tk):
     def _set_operate(self) -> None:
         """Set RSU to operate mode (3)."""
         self._set_rsu_mode({"operate": 3})
-    def show_help(self, tab_name: str, content: str) -> None:
+
+    def _show_help(self, tab_name: str, content: str) -> None:
         """Show a help window for the given tab."""
         help_window = tk.Toplevel(self)
         help_window.title(f"{tab_name} Help")
@@ -896,128 +899,7 @@ class RSUConfigurationApp(tk.Tk):
         button_frame.pack(fill='x')
         ttk.Button(button_frame, text="Close", command=help_window.destroy).pack(side='right')
 
-    def get_ifm_help_content(self) -> str:
-        """Return help content for Immediate Forward tab."""
-        return """Immediate Forward Messages (IFM) Configuration Help
-
-=== IFM Entry Fields ===
-For more information on each field, refer to the RSU SNMP MIB documentation section 5.5 Immediate Forward Messages.
-https://www.ntcip.org/file/2025/01/NTCIP-1218-v01A-2024-AsPublished.pdf
-
-PSID: Provider Service Identifier (hex value)
-      Identifies the type of message being transmitted.
-
-Channel: Transmission channel number (typically 172-184)
-         The radio channel on which the message will be broadcast.
-
-Enable: 0 = Disabled, 1 = Enabled
-        Controls whether this IFM entry is active.
-
-Priority: Message priority (0-63, higher is more important)
-          Determines transmission priority when multiple messages compete.
-
-Payload: Hex value containing the message data to be transmitted.
-
-
-Options: Bit-mapped options (BITS, hex):
-    Bit 0: 0=Bypass1609.2, 1=Process1609.2
-    Bit 1: 0=Secure,       1=Unsecure
-    Bit 2: 0=ContXmit,     1=NoXmitShortTermXceeded
-    Bit 3: 0=ContXmit,     1=NoXmitLongTermXceeded
-"""
-
-    def get_rfm_help_content(self) -> str:
-        """Return help content for Received Message Forward tab."""
-        return """Received Message Forward (RFM) Configuration Help
-
-=== RFM Entry Fields ===
-For more information on each field, refer to the RSU SNMP MIB documentation section 5.6 Received Messages.
-https://www.ntcip.org/file/2025/01/NTCIP-1218-v01A-2024-AsPublished.pdf
-
-PSID: Provider Service Identifier (hex value)
-      Identifies the type of message to forward when received.
-
-Destination IP: IP address where received messages will be forwarded.
-                The IP address of the destination system.
-
-Destination Port: Port number for forwarding.
-                  The port on the destination system.
-
-Protocol: Transport protocol for forwarding
-          1 = Other (A SET to a value of 'other' shall return a badValue error.)
-          2 = UDP (User Datagram Protocol)
-
-RSSI: Received Signal Strength Indicator threshold (dBm)
-      Minimum signal strength required to forward message.
-      Typical value: -100 (dBm)
-
-Interval: Forwarding interval in deciseconds (1/10 second)
-          Controls how often messages are forwarded.
-          1 = 100ms, 10 = 1 second
-
-Start Date: Message forwarding start date/time
-            Format: yyyy-mm-dd,hh:mm:ss.ms
-            Example: 2025-01-01,00:00:00.0
-            This is converted to SNMP DateAndTime format (8 octets)
-            Example: 2025-01-01,00:00:00.0 becomes 07 E9 01 01 00 00 00 00
-
-Stop Date: Message forwarding stop date/time
-           Format: yyyy-mm-dd,hh:mm:ss.ms
-           Example: 2030-01-01,00:00:00.0
-           This is converted to SNMP DateAndTime format (8 octets)
-
-Secure: Security requirement for forwarded messages
-        0 = Accept both secure and unsecure messages
-        1 = Accept only secure messages
-
-Auth Msg Interval: Authentication message interval in deciseconds
-                   0 = No authentication messages
-"""
-
-    def get_srm_help_content(self) -> str:
-        """Return help content for Store and Repeat Messages tab."""
-        return """Store and Repeat Messages (SRM) Configuration Help
-
-=== SRM Entry Fields ===
-For more information on each field, refer to the RSU SNMP MIB documentation section 5.4 Store and Repeat Messages.
-https://www.ntcip.org/file/2025/01/NTCIP-1218-v01A-2024-AsPublished.pdf
-
-PSID: Provider Service Identifier (hex value)
-      Identifies the message type to store and repeat.
-
-TX Channel: Transmission channel number (typically 172-184)
-            The radio channel used when repeating the message.
-
-TX Interval: Transmission interval in milliseconds
-             How often the stored message is repeated. (rsuMsgRepeatTxInterval)
-
-Start Date: Message forwarding start date/time
-            Format: yyyy-mm-dd,hh:mm:ss.ms
-            Example: 2025-01-01,00:00:00.0
-            This is converted to SNMP DateAndTime format (8 octets)
-            Example: 2025-01-01,00:00:00.0 becomes 07 E9 01 01 00 00 00 00
-
-Stop Date: Message forwarding stop date/time
-           Format: yyyy-mm-dd,hh:mm:ss.ms
-           Example: 2030-01-01,00:00:00.0
-           This is converted to SNMP DateAndTime format (8 octets)
-
-Payload: Hex value containing the message data to be transmitted.
-
-Enable: 0 = Disabled, 1 = Enabled
-        Controls whether this SRM entry is active (rsuMsgRepeatEnable).
-
-Priority: Message priority (0-63, higher is more important)
-          Determines transmission priority when multiple messages compete.
-
-Options: Bit-mapped options (BITS, hex):
-    Bit 0: 0=Bypass1609.2, 1=Process1609.2
-    Bit 1: 0=Secure,       1=Unsecure
-    Bit 2: 0=ContXmit,     1=NoXmitShortTermXceeded
-    Bit 3: 0=ContXmit,     1=NoXmitLongTermXceeded
-"""
-
-    def get_session(self):
+    def _get_session(self):
         """Create and return a new SNMP manager with current credentials."""
         # Map protocol strings to snmp library constants
         auth_protocol_map = {
@@ -1057,13 +939,13 @@ Options: Bit-mapped options (BITS, hex):
         manager = snmp_engine.Manager((hostname, port), defaultUser=username)
         return manager
 
-    def test_connection(self):
+    def _test_connection(self):
         """Test SNMP connection by performing a simple GET operation."""
         try:
-            session = self.get_session()
+            session = self._get_session()
             handle = session.get('1.3.6.1.2.1.1.1.0')  # sysDescr - standard OID
             varbind_list = handle.wait() if hasattr(handle, 'wait') else handle  # type: ignore
-            formatted_value = self.format_snmp_value(varbind_list[0])  # type: ignore
+            formatted_value = cr_helper.format_snmp_value(varbind_list[0])  # type: ignore
             self.results_text.configure(state='normal')
             self.results_text.insert(tk.END, f"Connection OK: {formatted_value}\n\n")
             self.results_text.configure(state='disabled')
@@ -1076,10 +958,10 @@ Options: Bit-mapped options (BITS, hex):
             messagebox.showerror("Connection Error", f"Failed to connect to device:\n{e}")
             return
 
-    def destroy_entry(self, delete_oid: str, entry_widget: ttk.Entry, button_widget: ttk.Button) -> None:
+    def _destroy_entry(self, delete_oid: str, entry_widget: ttk.Entry, button_widget: ttk.Button) -> None:
         """Destroy entry for the given oid and update given UI row."""
         try:
-            session = self.get_session()
+            session = self._get_session()
             session.set((delete_oid, Integer32(6))) # This OID (RowStatus) uses INTEGER32. 6 = destroy
             # Remove the row from UI
             entry_widget.destroy()
@@ -1088,69 +970,6 @@ Options: Bit-mapped options (BITS, hex):
             messagebox.showerror("SNMP Error", str(e))
         except Exception as e:
             messagebox.showerror("Error", f"Failed to destroy entry: {e}")
-
-    def format_snmp_value(self, varbind):
-        """Format SNMP VarBind value, converting binary data to hex string if needed, and 8-byte octet strings to datetime."""
-        # varbind has .value attribute which is an snmp.smi.ObjectSyntax object
-        value = varbind.value
-        
-        # Handle INTEGER32 types
-        if hasattr(value, 'value') and isinstance(value.value, int):
-            return str(value.value)
-        
-        # Handle different value types from snmp library
-        if hasattr(value, 'data'):  # OctetString type
-            data = value.data
-            if isinstance(data, bytes):
-                # Check if this is an 8-byte DateAndTime value
-                if len(data) == 8:
-                    # Try to convert to datetime string
-                    datetime_str = cr_helper.convert_snmp_datetime_to_string(data)
-                    # Only return as datetime if it looks valid (not all hex)
-                    if ',' in datetime_str and '-' in datetime_str:
-                        return datetime_str
-                
-                # Try to decode as UTF-8 string first
-                try:
-                    decoded_str = data.decode('utf-8')
-                    # If it's printable, return as string
-                    if all(32 <= ord(c) <= 126 or c in '\t\n\r' for c in decoded_str):
-                        return decoded_str
-                except (UnicodeDecodeError, AttributeError):
-                    pass
-                
-                # Return as hex string if not printable
-                return ' '.join(f'{b:02x}' for b in data)
-            elif isinstance(data, str):
-                return data
-            return str(data)
-        elif isinstance(value, bytes):
-            # Check if this is an 8-byte DateAndTime value
-            if len(value) == 8:
-                datetime_str = cr_helper.convert_snmp_datetime_to_string(value)
-                if ',' in datetime_str and '-' in datetime_str:
-                    return datetime_str
-            
-            # Try to decode as UTF-8 string first
-            try:
-                decoded_str = value.decode('utf-8')
-                # If it's printable, return as string
-                if all(32 <= ord(c) <= 126 or c in '\t\n\r' for c in decoded_str):
-                    return decoded_str
-            except (UnicodeDecodeError, AttributeError):
-                pass
-            
-            return ' '.join(f'{b:02x}' for b in value)
-        elif isinstance(value, str):
-            # Check if string contains non-printable characters
-            if any(ord(c) < 32 or ord(c) > 126 for c in value):
-                # Convert to hex
-                return ' '.join(f'{ord(c):02x}' for c in value)
-            return value
-        elif isinstance(value, int):
-            return str(value)
-        
-        return str(value)
 
 def main():
     root = RSUConfigurationApp()
