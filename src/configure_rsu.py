@@ -838,8 +838,8 @@ class RSUConfigurationApp(tk.Tk):
             lon_value = varbind_list[1].value  # type: ignore
             elev_value = varbind_list[2].value  # type: ignore
 
-            latitude = lat_value.value if hasattr(lat_value, 'value') else lat_value
-            longitude = lon_value.value if hasattr(lon_value, 'value') else lon_value
+            latitude = lat_value.value * pow(10, -7) if hasattr(lat_value, 'value') else lat_value * pow(10, -7) # convert to degrees
+            longitude = lon_value.value * pow(10, -7) if hasattr(lon_value, 'value') else lon_value * pow(10, -7) # convert to degrees
             elevation = elev_value.value * 0.01 if hasattr(elev_value, 'value') else elev_value * 0.01 # convert to meters
 
             self.results_text.configure(state='normal')
