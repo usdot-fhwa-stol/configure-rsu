@@ -89,6 +89,7 @@ class RSUConfigurationApp(tk.Tk):
         button_frame.grid(row=r, column=0, columnspan=4, sticky='ew', padx=6, pady=6)
         ttk.Button(button_frame, text="Test Connection", command=self._test_connection).pack(side='left', padx=6)
         ttk.Button(button_frame, text="Get RSU Mode Status", command=self._get_rsu_mode_status).pack(side='left', padx=6)
+        ttk.Button(button_frame, text="Get RSU GNSS Location", command=self._get_rsu_gnss_location).pack(side='left', padx=6)
         ttk.Button(button_frame, text="Quit", command=self.quit).pack(side='right', padx=6)
         ttk.Button(button_frame, text="Help", command=lambda: self._show_help("SNMP Credentials", "")).pack(side='right', padx=6)
 
@@ -819,6 +820,38 @@ class RSUConfigurationApp(tk.Tk):
         except Exception as e:
             self.results_text.configure(state='normal')
             self.results_text.insert(tk.END, f"ERROR getting RSU mode status: {e}\n\n")
+            self.results_text.configure(state='disabled')
+            self.update_idletasks()
+            raise
+
+    def _get_rsu_gnss_location(self) -> None:
+        """Outputs current RSU GNSS location."""
+        gnss_lat_oid = "1.3.6.1.4.1.1206.4.2.18.6.6.0"
+        gnss_lon_oid = "1.3.6.1.4.1.1206.4.2.18.6.7.0"
+        gnss_elev_oid = "1.3.6.1.4.1.1206.4.2.18.6.8.0"
+        
+        try:
+            session = self._get_session()
+            handle = session.get((gnss_lat_oid, gnss_lon_oid, gnss_elev_oid))
+            varbind_list = handle.wait() if hasattr(handle, 'wait') else handle  # type: ignore
+            lat_value = varbind_list[0].value  # type: ignore
+            lon_value = varbind_list[1].value  # type: ignore
+            elev_value = varbind_list[2].value  # type: ignore
+
+            latitude = lat_value.value if hasattr(lat_value, 'value') else lat_value
+            longitude = lon_value.value if hasattr(lon_value, 'value') else lon_value
+            elevation = elev_value.value * 0.01 if hasattr(elev_value, 'value') else elev_value * 0.01 # convert to meters
+
+            self.results_text.configure(state='normal')
+            self.results_text.insert(tk.END, f"RSU GNSS Location:\n")
+            self.results_text.insert(tk.END, f"  Latitude: {latitude / 10000000:.7f}°\n")
+            self.results_text.insert(tk.END, f"  Longitude: {longitude / 10000000:.7f}°\n")
+            self.results_text.insert(tk.END, f"  Elevation: {elevation} meters\n\n")
+            self.results_text.configure(state='disabled')
+            self.update_idletasks()
+        except Exception as e:
+            self.results_text.configure(state='normal')
+            self.results_text.insert(tk.END, f"ERROR getting RSU GNSS location: {e}\n\n")
             self.results_text.configure(state='disabled')
             self.update_idletasks()
             raise
