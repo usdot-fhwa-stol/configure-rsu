@@ -7,6 +7,7 @@ from snmp.security.usm.auth import HmacMd5, HmacSha, HmacSha256, HmacSha512
 from snmp.security.usm.priv import DesCbc, AesCfb128
 from snmp.smi import OctetString, Integer32
 import os
+import socket
 from dotenv import load_dotenv
 from binascii import unhexlify
 import cr_helper
@@ -782,6 +783,68 @@ class RSUConfigurationApp(tk.Tk):
         ttk.Button(controls, text="Get SRM Info", command=get_srm_info).pack(side='left', padx=6)
         ttk.Button(controls, text="Help", command=lambda: self._show_help("Store-and-Repeat", cr_helper.get_srm_help_content())).pack(side='left', padx=6)
 
+    def create_active_message_tab(self, notebook):
+        """Create the Active Message tab"""
+        am_tab = ttk.Frame(notebook, padding=12)
+        notebook.add(am_tab, text="Send Active Message")
+
+        # Layout config
+        am_tab.columnconfigure(1, weight=1)
+        am_tab.columnconfigure(2, weight=1)
+
+        # SNMP session input fields
+        r = 0
+        ttk.Label(am_tab, text="RSU IP Address:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
+        self.hostname_var = tk.StringVar(value=IP_ADDRESS if IP_ADDRESS else "192.168.55.20")
+        ttk.Entry(am_tab, textvariable=self.hostname_var).grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
+        r += 1
+        ttk.Label(am_tab, text="RSU IFM Port:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
+        self.port_var = tk.IntVar(value=1516)
+        ttk.Entry(am_tab, textvariable=self.port_var).grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
+        r += 1
+        ttk.Label(am_tab, text="Message Type:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
+        self.msg_type_var = tk.StringVar(value="MAP")
+        ttk.Combobox(am_tab, textvariable=self.msg_type_var, values=["MAP", "SPAT", "BSM", "SRM", "SSM", "TIM", "PSM", "RSM", "SDSM"]).grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
+        r += 1
+        ttk.Label(am_tab, text="PSID:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
+        self.psid_var = tk.StringVar(value="8002")
+        ttk.Entry(am_tab, textvariable=self.psid_var).grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
+        r += 1
+        ttk.Label(am_tab, text="Priority:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
+        self.priority_var = tk.IntVar(value=3)
+        ttk.Entry(am_tab, textvariable=self.priority_var).grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
+        r += 1
+        ttk.Label(am_tab, text="Tx Mode:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
+        self.tx_mode_var = tk.StringVar(value="CONT")
+        ttk.Combobox(am_tab, textvariable=self.tx_mode_var, values=["CONT", "ALT"]).grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
+        r += 1
+        ttk.Label(am_tab, text="Tx Channel:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
+        self.tx_channel_var = tk.IntVar(value=183)
+        ttk.Entry(am_tab, textvariable=self.tx_channel_var, state="readonly").grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
+        r += 1
+        ttk.Label(am_tab, text="Tx Interval:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
+        self.tx_interval_var = tk.IntVar(value=0)
+        ttk.Entry(am_tab, textvariable=self.tx_interval_var, state="readonly").grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
+        r += 1
+        ttk.Label(am_tab, text="Signature:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
+        self.signature_var = tk.StringVar(value="False")
+        ttk.Combobox(am_tab, textvariable=self.signature_var, values=["True", "False"]).grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
+        r += 1
+        ttk.Label(am_tab, text="Encryption:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
+        self.encryption_var = tk.StringVar(value="False")
+        ttk.Combobox(am_tab, textvariable=self.encryption_var, values=["True", "False"]).grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
+        r += 1
+        ttk.Label(am_tab, text="Payload:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
+        self.payload_var = tk.StringVar(value="")
+        ttk.Entry(am_tab, textvariable=self.payload_var).grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
+
+        # Buttons
+        r += 1
+        button_frame = ttk.Frame(am_tab)
+        button_frame.grid(row=r, column=0, columnspan=4, sticky='ew', padx=6, pady=6)
+        ttk.Button(button_frame, text="Send Message", command=self._test_connection).pack(side='right', padx=6)
+        ttk.Button(button_frame, text="Help", command=lambda: self._show_help("Send Active Message", cr_helper.get_amf_help_content())).pack(side='right', padx=6)
+
     # Methods
     def _get_rsu_mode(self) -> int:
         """Get RSU mode.
@@ -970,6 +1033,27 @@ class RSUConfigurationApp(tk.Tk):
             messagebox.showerror("SNMP Error", str(e))
         except Exception as e:
             messagebox.showerror("Error", f"Failed to destroy entry: {e}")
+
+    def _send_amf(self):
+        """Send an Active Message File (AMF) to the RSU using UDP"""
+        amf = (
+            f"Version=0.7\n"
+            f"Type={self.msg_type_var.get()}\n"
+            f"PSID={self.psid_var.get()}\n"
+            f"Priority={self.priority_var.get()}\n"
+            f"TxMode={self.tx_mode_var.get()}\n"
+            f"TxChannel={self.tx_channel_var.get()}\n"
+            f"TxInterval={self.tx_interval_var.get()}\n"
+            f"DeliveryStart=\n"
+            f"DeliveryStop=\n"
+            f"Signature={self.signature_var.get()}\n"
+            f"Encryption={self.encryption_var.get()}\n"
+            f"Payload={self.payload_var.get()}"
+        )
+        hex_data = amf.encode('utf-8')
+        sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sk.sendto(hex_data, (self.hostname_var.get(), self.port_var.get()))
+        messagebox.showinfo("AMF Sent", "Active Message File has been sent to the RSU.")
 
 def main():
     root = RSUConfigurationApp()

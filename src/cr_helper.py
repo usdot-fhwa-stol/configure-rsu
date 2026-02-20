@@ -266,3 +266,55 @@ Options: Bit-mapped options (BITS, hex):
     Bit 2: 0=ContXmit,     1=NoXmitShortTermXceeded
     Bit 3: 0=ContXmit,     1=NoXmitLongTermXceeded
 """
+
+def get_amf_help_content() -> str:
+    """Return help content for Active Message File tab."""
+    return """Active Message File (AMF) Configuration Help
+=== AMF Entry Fields ===
+# Message File Format
+# Modified Date: 04/10/2014
+# Version: 0.7
+Version=0.7
+#
+# Message Dispatch Items
+#
+# All line beginning with # shall be removed in file sent to radio
+#
+# Message Type
+# Values: SPAT, MAP, TIM, (other J2735 message types)
+Type=<Type>
+#
+# Message PSID as a 2 Byte Hex value (e.g. 8003)
+PSID=<PSID>
+#
+# Message Priority in the range of 0 (lowest) through 7
+Priority=<priority>
+#
+# Transmission Channel Mode
+# Allowed values: CONT, ALT
+TxMode=<txmode>
+# Allowed values: 172-183, CCH, SCH (note: “CCH” refers to DSRC Channel 178 and SCH refers to
+# the operator configured DSRC Service Channel. 183 is the only C-V2X channel.)
+TxChannel=<channel>
+#
+# Transmission Broadcast Interval in Seconds
+# Allowed values: 0 for Immediate-Forwarding, 1 to 5 for Store-and-Repeat
+TxInterval=<txinterval>
+#
+# Message Delivery (broadcast) start time (UTC date and time) in the form:
+# "mm/dd/yyyy, hh:mm”
+# Leave value blank if Immediate Forward mode
+DeliveryStart=<mm/dd/yyyy, hh:mm>
+#
+# Message Delivery (broadcast) stop time (UTC date and time) in the form:
+# "mm/dd/yyyy, hh:mm”
+# Leave value blank if Immediate Forward mode
+DeliveryStop=<mm/dd/yyyy, hh:mm>
+#
+# Message Signature/Encryption
+Signature=<True/False>
+Encryption=<True/False>
+# 
+# Message Payload (encoded according to J2735 or other definition)
+Payload=<V2X message payload>
+"""
