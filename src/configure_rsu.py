@@ -40,6 +40,7 @@ class RSUConfigurationApp(tk.Tk):
         self.create_immediate_forward_tab(notebook)
         self.create_received_message_forward_tab(notebook)
         self.create_store_and_repeat_tab(notebook)
+        self.create_active_message_tab(notebook)
 
     def create_credentials_tab(self, notebook):
         """Create the SNMP Credentials tab"""
@@ -842,7 +843,7 @@ class RSUConfigurationApp(tk.Tk):
         r += 1
         button_frame = ttk.Frame(am_tab)
         button_frame.grid(row=r, column=0, columnspan=4, sticky='ew', padx=6, pady=6)
-        ttk.Button(button_frame, text="Send Message", command=self._test_connection).pack(side='right', padx=6)
+        ttk.Button(button_frame, text="Send Message", command=self._send_amf).pack(side='right', padx=6)
         ttk.Button(button_frame, text="Help", command=lambda: self._show_help("Send Active Message", cr_helper.get_amf_help_content())).pack(side='right', padx=6)
 
     # Methods
