@@ -793,15 +793,15 @@ class RSUConfigurationApp(tk.Tk):
         am_tab.columnconfigure(1, weight=1)
         am_tab.columnconfigure(2, weight=1)
 
-        # SNMP session input fields
+        # AMF input fields
         r = 0
         ttk.Label(am_tab, text="RSU IP Address:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
-        self.hostname_var = tk.StringVar(value=IP_ADDRESS if IP_ADDRESS else "192.168.55.20")
-        ttk.Entry(am_tab, textvariable=self.hostname_var).grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
+        self.amf_rsu_var = tk.StringVar(value="192.168.55.20")
+        ttk.Entry(am_tab, textvariable=self.amf_rsu_var).grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
         r += 1
         ttk.Label(am_tab, text="RSU IFM Port:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
-        self.port_var = tk.IntVar(value=1516)
-        ttk.Entry(am_tab, textvariable=self.port_var).grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
+        self.amf_port_var = tk.IntVar(value=1516)
+        ttk.Entry(am_tab, textvariable=self.amf_port_var).grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
         r += 1
         ttk.Label(am_tab, text="Message Type:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
         self.msg_type_var = tk.StringVar(value="MAP")
@@ -839,11 +839,35 @@ class RSUConfigurationApp(tk.Tk):
         self.payload_var = tk.StringVar(value="")
         ttk.Entry(am_tab, textvariable=self.payload_var).grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
 
+        def send_amf() -> None:
+            """Send an Active Message File (AMF) to the RSU using UDP"""
+            try:
+                amf = (
+                f"Version=0.7\n"
+                f"Type={self.msg_type_var.get()}\n"
+                f"PSID={self.psid_var.get()}\n"
+                f"Priority={self.priority_var.get()}\n"
+                f"TxMode={self.tx_mode_var.get()}\n"
+                f"TxChannel={self.tx_channel_var.get()}\n"
+                f"TxInterval={self.tx_interval_var.get()}\n"
+                f"DeliveryStart=\n"
+                f"DeliveryStop=\n"
+                f"Signature={self.signature_var.get()}\n"
+                f"Encryption={self.encryption_var.get()}\n"
+                f"Payload={self.payload_var.get()}"
+                )
+                hex_data = amf.encode('utf-8')
+                sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                sk.sendto(hex_data, (self.hostname_var.get(), self.port_var.get()))
+                messagebox.showinfo("AMF Sent", "Active Message File has been sent to the RSU.")
+            except Exception as e:
+                messagebox.showerror("Error Sending AMF", f"Failed to send Active Message File:\n{e}")
+
         # Buttons
         r += 1
         button_frame = ttk.Frame(am_tab)
         button_frame.grid(row=r, column=0, columnspan=4, sticky='ew', padx=6, pady=6)
-        ttk.Button(button_frame, text="Send Message", command=self._send_amf).pack(side='right', padx=6)
+        ttk.Button(button_frame, text="Send Message", command=send_amf).pack(side='right', padx=6)
         ttk.Button(button_frame, text="Help", command=lambda: self._show_help("Send Active Message", cr_helper.get_amf_help_content())).pack(side='right', padx=6)
 
     # Methods
@@ -1034,27 +1058,6 @@ class RSUConfigurationApp(tk.Tk):
             messagebox.showerror("SNMP Error", str(e))
         except Exception as e:
             messagebox.showerror("Error", f"Failed to destroy entry: {e}")
-
-    def _send_amf(self):
-        """Send an Active Message File (AMF) to the RSU using UDP"""
-        amf = (
-            f"Version=0.7\n"
-            f"Type={self.msg_type_var.get()}\n"
-            f"PSID={self.psid_var.get()}\n"
-            f"Priority={self.priority_var.get()}\n"
-            f"TxMode={self.tx_mode_var.get()}\n"
-            f"TxChannel={self.tx_channel_var.get()}\n"
-            f"TxInterval={self.tx_interval_var.get()}\n"
-            f"DeliveryStart=\n"
-            f"DeliveryStop=\n"
-            f"Signature={self.signature_var.get()}\n"
-            f"Encryption={self.encryption_var.get()}\n"
-            f"Payload={self.payload_var.get()}"
-        )
-        hex_data = amf.encode('utf-8')
-        sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sk.sendto(hex_data, (self.hostname_var.get(), self.port_var.get()))
-        messagebox.showinfo("AMF Sent", "Active Message File has been sent to the RSU.")
 
 def main():
     root = RSUConfigurationApp()
