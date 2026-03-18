@@ -118,6 +118,9 @@ class RSUConfigurationApp(tk.Tk):
         controls = ttk.Frame(ifm_tab)
         controls.grid(row=0, column=0, sticky='ew', padx=6, pady=6)
 
+        # MIB version toggle variable
+        ifm_mib_var = tk.StringVar(value="ntcip1218")
+
         # Configuration section
         config_frame = ttk.LabelFrame(ifm_tab, text="Configure IFM Entries", padding=8)
         config_frame.grid(row=1, column=0, sticky='ew', padx=6, pady=6)
@@ -131,16 +134,24 @@ class RSUConfigurationApp(tk.Tk):
         # Storage for IFM entry configurations
         ifm_entries = []
 
+        def update_field_states() -> None:
+            """Enable/disable fields based on selected MIB version."""
+            is_ntcip = ifm_mib_var.get() == "ntcip1218"
+            for entry in ifm_entries:
+                ntcip_state = 'normal' if is_ntcip else 'disabled'
+                rsu41_state = 'disabled' if is_ntcip else 'normal'
+                for w in entry.get('ntcip_widgets', []):
+                    w.configure(state=ntcip_state)
+                for w in entry.get('rsu41_widgets', []):
+                    w.configure(state=rsu41_state)
+
         def set_single_ifm_entry(entry_vars: dict, ifm_index: int) -> None:
             """Configure a single IFM entry."""
             try:
-                # Get values from the form
+                # Get common values from the form
                 psid = entry_vars['psid'].get().strip()
                 channel = entry_vars['channel'].get()
                 enable = entry_vars['enable'].get()
-                priority = entry_vars['priority'].get()
-                options = entry_vars['options'].get().strip()
-                payload = entry_vars['payload'].get().strip()
 
                 # Validate inputs
                 if not psid:
@@ -148,21 +159,38 @@ class RSUConfigurationApp(tk.Tk):
                     return
 
                 # RSU must be in standby mode to accept configuration changes
-                self._set_standby() 
+                self._set_standby()
 
                 # Configure the entry using SET operations
                 print(f"Configuring IFM entry {ifm_index}")
                 session = self._get_session()
-                base_oid = f"1.3.6.1.4.1.1206.4.2.18.4.2.1"
-                session.set(
-                    (f"{base_oid}.2.{ifm_index}", OctetString(unhexlify(psid))),      # rsuIFMPsid (octet string as hex)
-                    (f"{base_oid}.3.{ifm_index}", Integer32(int(channel))),           # rsuIFMTxChannel (integer)
-                    (f"{base_oid}.4.{ifm_index}", Integer32(int(enable))),            # rsuIFMEnable
-                    (f"{base_oid}.5.{ifm_index}", Integer32(4)),                      # rsuIFMStatus (4=createAndGo)
-                    (f"{base_oid}.6.{ifm_index}", Integer32(int(priority))),          # rsuIFMPriority
-                    (f"{base_oid}.7.{ifm_index}", OctetString(unhexlify(options))),   # rsuIFMOptions (bits)
-                    (f"{base_oid}.8.{ifm_index}", OctetString(unhexlify(payload)))    # rsuIFMPayload (hex)
-                )
+
+                if ifm_mib_var.get() == "ntcip1218":
+                    priority = entry_vars['priority'].get()
+                    options = entry_vars['options'].get().strip()
+                    payload = entry_vars['payload'].get().strip()
+                    base_oid = "1.3.6.1.4.1.1206.4.2.18.4.2.1"
+                    session.set(
+                        (f"{base_oid}.2.{ifm_index}", OctetString(unhexlify(psid))),      # rsuIFMPsid (octet string as hex)
+                        (f"{base_oid}.3.{ifm_index}", Integer32(int(channel))),           # rsuIFMTxChannel (integer)
+                        (f"{base_oid}.4.{ifm_index}", Integer32(int(enable))),            # rsuIFMEnable
+                        (f"{base_oid}.5.{ifm_index}", Integer32(4)),                      # rsuIFMStatus (4=createAndGo)
+                        (f"{base_oid}.6.{ifm_index}", Integer32(int(priority))),          # rsuIFMPriority
+                        (f"{base_oid}.7.{ifm_index}", OctetString(unhexlify(options))),   # rsuIFMOptions (bits)
+                        (f"{base_oid}.8.{ifm_index}", OctetString(unhexlify(payload)))    # rsuIFMPayload (hex)
+                    )
+                else:
+                    dsrc_msg_id = entry_vars['dsrc_msg_id'].get()
+                    tx_mode = entry_vars['tx_mode'].get()
+                    base_oid = "1.3.6.1.4.1.15628.4.1.5.1"
+                    session.set(
+                        (f"{base_oid}.2.{ifm_index}", OctetString(unhexlify(psid))),      # rsuIFMPsid
+                        (f"{base_oid}.3.{ifm_index}", Integer32(int(dsrc_msg_id))),       # rsuIFMDsrcMsgId
+                        (f"{base_oid}.4.{ifm_index}", Integer32(int(tx_mode))),           # rsuIFMTxMode
+                        (f"{base_oid}.5.{ifm_index}", Integer32(int(channel))),           # rsuIFMTxChannel
+                        (f"{base_oid}.6.{ifm_index}", Integer32(int(enable))),            # rsuIFMEnable
+                        (f"{base_oid}.7.{ifm_index}", Integer32(4))                       # rsuIFMStatus (4=createAndGo)
+                    )
 
                 # Return RSU to operate mode
                 self._set_operate()
@@ -200,11 +228,15 @@ class RSUConfigurationApp(tk.Tk):
                 'priority': tk.IntVar(value=5),
                 'options': tk.StringVar(value='00'),
                 'payload': tk.StringVar(value=''),
+                'dsrc_msg_id': tk.IntVar(value=31),
+                'tx_mode': tk.IntVar(value=1),
                 'frame': entry_frame,
-                'index': idx_val
+                'index': idx_val,
+                'ntcip_widgets': [],
+                'rsu41_widgets': [],
             }
 
-            # Row 0: Index and PSID
+            # Row 0: Index and PSID (common)
             ttk.Label(entry_frame, text="IFM Index:").grid(row=0, column=0, sticky='e', padx=4, pady=2)
             def on_index_change(*_args):
                 # Gracefully handle empty/non-integer input while typing
@@ -225,31 +257,47 @@ class RSUConfigurationApp(tk.Tk):
             ttk.Label(entry_frame, text="PSID (hex):").grid(row=0, column=2, sticky='e', padx=4, pady=2)
             ttk.Entry(entry_frame, textvariable=entry_vars['psid'], width=15).grid(row=0, column=3, sticky='ew', padx=4, pady=2)
 
-            # Row 1: Channel and Priority
+            # Row 1: Channel and Enable (common)
             ttk.Label(entry_frame, text="Channel:").grid(row=1, column=0, sticky='e', padx=4, pady=2)
             ttk.Entry(entry_frame, textvariable=entry_vars['channel'], width=10, state="readonly").grid(row=1, column=1, sticky='w', padx=4, pady=2)
-            ttk.Label(entry_frame, text="Priority:").grid(row=1, column=2, sticky='e', padx=4, pady=2)
-            ttk.Entry(entry_frame, textvariable=entry_vars['priority'], width=10).grid(row=1, column=3, sticky='ew', padx=4, pady=2)
+            ttk.Label(entry_frame, text="Enable (0/1):").grid(row=1, column=2, sticky='e', padx=4, pady=2)
+            ttk.Entry(entry_frame, textvariable=entry_vars['enable'], width=10, state="readonly").grid(row=1, column=3, sticky='ew', padx=4, pady=2)
 
-            # Row 2: Enable and Options
-            ttk.Label(entry_frame, text="Enable (0/1):").grid(row=2, column=0, sticky='e', padx=4, pady=2)
-            ttk.Entry(entry_frame, textvariable=entry_vars['enable'], width=10, state="readonly").grid(row=2, column=1, sticky='w', padx=4, pady=2)
-            ttk.Label(entry_frame, text="Options (hex):").grid(row=2, column=2, sticky='e', padx=4, pady=2)
-            ttk.Entry(entry_frame, textvariable=entry_vars['options'], width=15).grid(row=2, column=3, sticky='ew', padx=4, pady=2)
+            # Row 2: DSRC Msg ID and TX Mode (RSU 4.1 only — greyed out for NTCIP 1218)
+            ttk.Label(entry_frame, text="DSRC Msg ID:").grid(row=2, column=0, sticky='e', padx=4, pady=2)
+            ent_dsrc = ttk.Entry(entry_frame, textvariable=entry_vars['dsrc_msg_id'], width=10)
+            ent_dsrc.grid(row=2, column=1, sticky='w', padx=4, pady=2)
+            ttk.Label(entry_frame, text="TX Mode:").grid(row=2, column=2, sticky='e', padx=4, pady=2)
+            ent_txmode = ttk.Entry(entry_frame, textvariable=entry_vars['tx_mode'], width=10)
+            ent_txmode.grid(row=2, column=3, sticky='ew', padx=4, pady=2)
+            entry_vars['rsu41_widgets'] = [ent_dsrc, ent_txmode]
 
-            # Row 3: Payload
-            ttk.Label(entry_frame, text="Payload (hex):").grid(row=3, column=0, sticky='e', padx=4, pady=2)
-            ttk.Entry(entry_frame, textvariable=entry_vars['payload'], width=20).grid(row=3, column=1, columnspan=3, sticky='ew', padx=4, pady=2)
+            # Row 3: Priority and Options (NTCIP 1218 only — greyed out for RSU 4.1)
+            ttk.Label(entry_frame, text="Priority:").grid(row=3, column=0, sticky='e', padx=4, pady=2)
+            ent_priority = ttk.Entry(entry_frame, textvariable=entry_vars['priority'], width=10)
+            ent_priority.grid(row=3, column=1, sticky='w', padx=4, pady=2)
+            ttk.Label(entry_frame, text="Options (hex):").grid(row=3, column=2, sticky='e', padx=4, pady=2)
+            ent_options = ttk.Entry(entry_frame, textvariable=entry_vars['options'], width=15)
+            ent_options.grid(row=3, column=3, sticky='ew', padx=4, pady=2)
 
-            # Row 4: Button frame for Set and Remove buttons
+            # Row 4: Payload (NTCIP 1218 only — greyed out for RSU 4.1)
+            ttk.Label(entry_frame, text="Payload (hex):").grid(row=4, column=0, sticky='e', padx=4, pady=2)
+            ent_payload = ttk.Entry(entry_frame, textvariable=entry_vars['payload'], width=20)
+            ent_payload.grid(row=4, column=1, columnspan=3, sticky='ew', padx=4, pady=2)
+            entry_vars['ntcip_widgets'] = [ent_priority, ent_options, ent_payload]
+
+            # Row 5: Button frame for Set and Remove buttons
             button_frame = ttk.Frame(entry_frame)
-            button_frame.grid(row=4, column=0, columnspan=4, pady=4)
+            button_frame.grid(row=5, column=0, columnspan=4, pady=4)
             set_btn = ttk.Button(button_frame, text="Set Entry", command=lambda: set_single_ifm_entry(entry_vars, entry_vars['index']))
             set_btn.pack(side='left', padx=4)
             remove_btn = ttk.Button(button_frame, text="Remove Entry", command=lambda: remove_ifm_entry(entry_vars))
             remove_btn.pack(side='left', padx=4)
 
             ifm_entries.append(entry_vars)
+
+            # Apply current MIB field states to the new entry
+            update_field_states()
 
         def remove_ifm_entry(entry_vars: dict) -> None:
             """Remove an IFM entry form."""
@@ -261,7 +309,10 @@ class RSUConfigurationApp(tk.Tk):
 
         def destroy_ifm_entry(idx: int, entry_widget: ttk.Entry, button_widget: ttk.Button) -> None:
             """Destroy IFM entry for the given index and update given UI row."""
-            delete_ifm_oid = f"1.3.6.1.4.1.1206.4.2.18.4.2.1.5.{idx}"
+            if ifm_mib_var.get() == "ntcip1218":
+                delete_ifm_oid = f"1.3.6.1.4.1.1206.4.2.18.4.2.1.5.{idx}"
+            else:
+                delete_ifm_oid = f"1.3.6.1.4.1.15628.4.1.5.1.7.{idx}"
             self._destroy_entry(delete_ifm_oid, entry_widget, button_widget)
             # Refresh entries by running get operation
             get_ifm_info()
@@ -274,11 +325,15 @@ class RSUConfigurationApp(tk.Tk):
             # Enable the "Add IFM Entry" button after first Get
             add_ifm_btn.configure(state='normal')
 
+            if ifm_mib_var.get() == "ntcip1218":
+                base_oid = "1.3.6.1.4.1.1206.4.2.18.4.2.1"
+            else:
+                base_oid = "1.3.6.1.4.1.15628.4.1.5.1"
 
             session = self._get_session()
             current_row = 0
             for i in range(1, 7):
-                get_oid = f"1.3.6.1.4.1.1206.4.2.18.4.2.1.2.{i}"
+                get_oid = f"{base_oid}.2.{i}"
                 try:
                     handle = session.get(get_oid)
                     varbind_list = handle.wait() if hasattr(handle, 'wait') else handle  # type: ignore
@@ -303,7 +358,30 @@ class RSUConfigurationApp(tk.Tk):
                     btn.grid(row=current_row, column=1, sticky='w', padx=4, pady=2)
                     current_row += 1
                     messagebox.showerror("SNMP Error", str(e))
-                    messagebox.showerror("SNMP Error", str(e))
+
+        # MIB version toggle in controls
+        mode_frame = ttk.Frame(controls)
+        mode_frame.pack(side='left', padx=6)
+
+        btn_ntcip = tk.Button(mode_frame, text="NTCIP 1218", relief='sunken', padx=10, pady=4,
+                              bg='#d0d0d0', activebackground='#d0d0d0')
+        btn_rsu41 = tk.Button(mode_frame, text="RSU 4.1", relief='raised', padx=10, pady=4,
+                              bg='#f0f0f0', activebackground='#f0f0f0')
+        btn_ntcip.pack(side='left')
+        btn_rsu41.pack(side='left')
+
+        def toggle_mib(selection: str) -> None:
+            ifm_mib_var.set(selection)
+            if selection == "ntcip1218":
+                btn_ntcip.configure(relief='sunken', bg='#d0d0d0')
+                btn_rsu41.configure(relief='raised', bg='#f0f0f0')
+            else:
+                btn_ntcip.configure(relief='raised', bg='#f0f0f0')
+                btn_rsu41.configure(relief='sunken', bg='#d0d0d0')
+            update_field_states()
+
+        btn_ntcip.configure(command=lambda: toggle_mib("ntcip1218"))
+        btn_rsu41.configure(command=lambda: toggle_mib("rsu41"))
 
         # Create buttons with "Add IFM Entry" initially disabled
         add_ifm_btn = ttk.Button(controls, text="Add IFM Entry", command=add_ifm_entry, state='disabled')
