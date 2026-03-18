@@ -143,9 +143,6 @@ class RSUConfigurationApp(tk.Tk):
         controls = ttk.Frame(ifm_tab)
         controls.grid(row=0, column=0, sticky='ew', padx=6, pady=6)
 
-        # MIB version toggle variable
-        ifm_mib_var = tk.StringVar(value="ntcip1218")
-
         # Configuration section
         config_frame = ttk.LabelFrame(ifm_tab, text="Configure IFM Entries", padding=8)
         config_frame.grid(row=1, column=0, sticky='ew', padx=6, pady=6)
@@ -161,7 +158,7 @@ class RSUConfigurationApp(tk.Tk):
 
         def update_field_states() -> None:
             """Enable/disable fields based on selected MIB version."""
-            is_ntcip = ifm_mib_var.get() == "ntcip1218"
+            is_ntcip = self.mode_mib_var.get() == "ntcip1218"
             for entry in ifm_entries:
                 ntcip_state = 'normal' if is_ntcip else 'disabled'
                 rsu41_state = 'disabled' if is_ntcip else 'normal'
@@ -190,7 +187,7 @@ class RSUConfigurationApp(tk.Tk):
                 print(f"Configuring IFM entry {ifm_index}")
                 session = self._get_session()
 
-                if ifm_mib_var.get() == "ntcip1218":
+                if self.mode_mib_var.get() == "ntcip1218":
                     priority = entry_vars['priority'].get()
                     options = entry_vars['options'].get().strip()
                     payload = entry_vars['payload'].get().strip()
@@ -334,7 +331,7 @@ class RSUConfigurationApp(tk.Tk):
 
         def destroy_ifm_entry(idx: int, entry_widget: ttk.Entry, button_widget: ttk.Button) -> None:
             """Destroy IFM entry for the given index and update given UI row."""
-            if ifm_mib_var.get() == "ntcip1218":
+            if self.mode_mib_var.get() == "ntcip1218":
                 delete_ifm_oid = f"1.3.6.1.4.1.1206.4.2.18.4.2.1.5.{idx}"
             else:
                 delete_ifm_oid = f"1.3.6.1.4.1.15628.4.1.5.1.7.{idx}"
@@ -350,7 +347,7 @@ class RSUConfigurationApp(tk.Tk):
             # Enable the "Add IFM Entry" button after first Get
             add_ifm_btn.configure(state='normal')
 
-            if ifm_mib_var.get() == "ntcip1218":
+            if self.mode_mib_var.get() == "ntcip1218":
                 base_oid = "1.3.6.1.4.1.1206.4.2.18.4.2.1"
             else:
                 base_oid = "1.3.6.1.4.1.15628.4.1.5.1"
@@ -384,29 +381,8 @@ class RSUConfigurationApp(tk.Tk):
                     current_row += 1
                     messagebox.showerror("SNMP Error", str(e))
 
-        # MIB version toggle in controls
-        mode_frame = ttk.Frame(controls)
-        mode_frame.pack(side='left', padx=6)
-
-        btn_ntcip = tk.Button(mode_frame, text="NTCIP 1218", relief='sunken', padx=10, pady=4,
-                              bg='#d0d0d0', activebackground='#d0d0d0')
-        btn_rsu41 = tk.Button(mode_frame, text="RSU 4.1", relief='raised', padx=10, pady=4,
-                              bg='#f0f0f0', activebackground='#f0f0f0')
-        btn_ntcip.pack(side='left')
-        btn_rsu41.pack(side='left')
-
-        def toggle_mib(selection: str) -> None:
-            ifm_mib_var.set(selection)
-            if selection == "ntcip1218":
-                btn_ntcip.configure(relief='sunken', bg='#d0d0d0')
-                btn_rsu41.configure(relief='raised', bg='#f0f0f0')
-            else:
-                btn_ntcip.configure(relief='raised', bg='#f0f0f0')
-                btn_rsu41.configure(relief='sunken', bg='#d0d0d0')
-            update_field_states()
-
-        btn_ntcip.configure(command=lambda: toggle_mib("ntcip1218"))
-        btn_rsu41.configure(command=lambda: toggle_mib("rsu41"))
+        # Update IFM field states when MIB selection changes in credentials tab
+        self.mode_mib_var.trace_add('write', lambda *_: update_field_states())
 
         # Create buttons with "Add IFM Entry" initially disabled
         add_ifm_btn = ttk.Button(controls, text="Add IFM Entry", command=add_ifm_entry, state='disabled')
@@ -983,7 +959,7 @@ class RSUConfigurationApp(tk.Tk):
         if self.mode_mib_var.get() == "ntcip1218":
             mode_oid = "1.3.6.1.4.1.1206.4.2.18.16.2.0"
         else:
-            mode_oid = "1.3.6.1.4.1.15628.4.1.99.0"
+            mode_oid = "1.3.6.1.4.1.15628.4.1.99"
         try:
             session = self._get_session()
             handle = session.get(mode_oid)
@@ -1022,7 +998,7 @@ class RSUConfigurationApp(tk.Tk):
         if self.mode_mib_var.get() == "ntcip1218":
             mode_oid = "1.3.6.1.4.1.1206.4.2.18.16.2.0"
         else:
-            mode_oid = "1.3.6.1.4.1.15628.4.1.99.0"
+            mode_oid = "1.3.6.1.4.1.15628.4.1.99"
         target_name = list(target.keys())[0]
         target_mode = list(target.values())[0]
         print(f"Setting RSU to {target_name} mode...")
