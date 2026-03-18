@@ -85,6 +85,31 @@ class RSUConfigurationApp(tk.Tk):
         self.privacy_password_var = tk.StringVar(value=PRIV_PASSWORD if PRIV_PASSWORD else "privpass")
         ttk.Entry(body, textvariable=self.privacy_password_var, show="*").grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
 
+        # MIB version toggle for RSU mode OIDs
+        r += 1
+        mode_mib_frame = ttk.Frame(body)
+        mode_mib_frame.grid(row=r, column=0, columnspan=4, sticky='w', padx=6, pady=6)
+        ttk.Label(mode_mib_frame, text="RSU Mode MIB:").pack(side='left', padx=(0, 6))
+        self.mode_mib_var = tk.StringVar(value="ntcip1218")
+        self.btn_mode_ntcip = tk.Button(mode_mib_frame, text="NTCIP 1218", relief='sunken', padx=10, pady=4,
+                                        bg='#d0d0d0', activebackground='#d0d0d0')
+        self.btn_mode_rsu41 = tk.Button(mode_mib_frame, text="RSU 4.1", relief='raised', padx=10, pady=4,
+                                        bg='#f0f0f0', activebackground='#f0f0f0')
+        self.btn_mode_ntcip.pack(side='left')
+        self.btn_mode_rsu41.pack(side='left')
+
+        def toggle_mode_mib(selection: str) -> None:
+            self.mode_mib_var.set(selection)
+            if selection == "ntcip1218":
+                self.btn_mode_ntcip.configure(relief='sunken', bg='#d0d0d0')
+                self.btn_mode_rsu41.configure(relief='raised', bg='#f0f0f0')
+            else:
+                self.btn_mode_ntcip.configure(relief='raised', bg='#f0f0f0')
+                self.btn_mode_rsu41.configure(relief='sunken', bg='#d0d0d0')
+
+        self.btn_mode_ntcip.configure(command=lambda: toggle_mode_mib("ntcip1218"))
+        self.btn_mode_rsu41.configure(command=lambda: toggle_mode_mib("rsu41"))
+
         # Buttons
         r += 1
         button_frame = ttk.Frame(body)
@@ -229,7 +254,7 @@ class RSUConfigurationApp(tk.Tk):
                 'options': tk.StringVar(value='00'),
                 'payload': tk.StringVar(value=''),
                 'dsrc_msg_id': tk.IntVar(value=31),
-                'tx_mode': tk.IntVar(value=1),
+                'tx_mode': tk.IntVar(value=0),
                 'frame': entry_frame,
                 'index': idx_val,
                 'ntcip_widgets': [],
@@ -955,7 +980,10 @@ class RSUConfigurationApp(tk.Tk):
         Returns:
             int: Current RSU mode value. 1=other, 2=standby, 3=operate
         """
-        mode_oid = "1.3.6.1.4.1.1206.4.2.18.16.2.0"
+        if self.mode_mib_var.get() == "ntcip1218":
+            mode_oid = "1.3.6.1.4.1.1206.4.2.18.16.2.0"
+        else:
+            mode_oid = "1.3.6.1.4.1.15628.4.1.99.0"
         try:
             session = self._get_session()
             handle = session.get(mode_oid)
@@ -991,7 +1019,10 @@ class RSUConfigurationApp(tk.Tk):
 
     def _set_rsu_mode(self, target: Dict[str, int]) -> None:
         """Set RSU to target mode."""
-        mode_oid = "1.3.6.1.4.1.1206.4.2.18.16.2.0"
+        if self.mode_mib_var.get() == "ntcip1218":
+            mode_oid = "1.3.6.1.4.1.1206.4.2.18.16.2.0"
+        else:
+            mode_oid = "1.3.6.1.4.1.15628.4.1.99.0"
         target_name = list(target.keys())[0]
         target_mode = list(target.values())[0]
         print(f"Setting RSU to {target_name} mode...")
