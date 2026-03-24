@@ -204,7 +204,7 @@ class RSUConfigurationApp(tk.Tk):
                 else:
                     dsrc_msg_id = entry_vars['dsrc_msg_id'].get()
                     tx_mode = entry_vars['tx_mode'].get()
-                    base_oid = "1.3.6.1.4.1.15628.4.1.5.1"
+                    base_oid = "1.0.15628.4.1.5.1"
                     session.set(
                         (f"{base_oid}.2.{ifm_index}", OctetString(unhexlify(psid))),      # rsuIFMPsid
                         (f"{base_oid}.3.{ifm_index}", Integer32(int(dsrc_msg_id))),       # rsuIFMDsrcMsgId
@@ -245,7 +245,7 @@ class RSUConfigurationApp(tk.Tk):
                                           '8003' if idx_val == 2 else 
                                           '8010' if idx_val == 3 else 
                                           '0027' if idx_val == 4 else 'E0000017'),
-                'channel': tk.IntVar(value=183),
+                'channel': tk.IntVar(value=180 if self.mode_mib_var.get() == "rsu41" else 183),
                 'enable': tk.IntVar(value=1),
                 'priority': tk.IntVar(value=5),
                 'options': tk.StringVar(value='00'),
@@ -334,7 +334,7 @@ class RSUConfigurationApp(tk.Tk):
             if self.mode_mib_var.get() == "ntcip1218":
                 delete_ifm_oid = f"1.3.6.1.4.1.1206.4.2.18.4.2.1.5.{idx}"
             else:
-                delete_ifm_oid = f"1.3.6.1.4.1.15628.4.1.5.1.7.{idx}"
+                delete_ifm_oid = f"1.0.15628.4.1.5.1.7.{idx}"
             self._destroy_entry(delete_ifm_oid, entry_widget, button_widget)
             # Refresh entries by running get operation
             get_ifm_info()
@@ -350,7 +350,7 @@ class RSUConfigurationApp(tk.Tk):
             if self.mode_mib_var.get() == "ntcip1218":
                 base_oid = "1.3.6.1.4.1.1206.4.2.18.4.2.1"
             else:
-                base_oid = "1.3.6.1.4.1.15628.4.1.5.1"
+                base_oid = "1.0.15628.4.1.5.1"
 
             session = self._get_session()
             current_row = 0
@@ -778,7 +778,7 @@ class RSUConfigurationApp(tk.Tk):
             entry_vars = {
                 'index_var': index_var,
                 'psid': tk.StringVar(value='8002'),
-                'channel': tk.IntVar(value=183),
+                'channel': tk.IntVar(value=180 if self.mode_mib_var.get() == "rsu41" else 183),
                 'interval': tk.IntVar(value=1000),
                 'start_date': tk.StringVar(value='2025-01-01,00:00:00.0'),
                 'stop_date': tk.StringVar(value='2030-01-01,00:00:00.0'),
@@ -959,7 +959,7 @@ class RSUConfigurationApp(tk.Tk):
         if self.mode_mib_var.get() == "ntcip1218":
             mode_oid = "1.3.6.1.4.1.1206.4.2.18.16.2.0"
         else:
-            mode_oid = "1.3.6.1.4.1.15628.4.1.99"
+            mode_oid = "1.0.15628.4.1.99.0"
         try:
             session = self._get_session()
             handle = session.get(mode_oid)
@@ -998,7 +998,7 @@ class RSUConfigurationApp(tk.Tk):
         if self.mode_mib_var.get() == "ntcip1218":
             mode_oid = "1.3.6.1.4.1.1206.4.2.18.16.2.0"
         else:
-            mode_oid = "1.3.6.1.4.1.15628.4.1.99"
+            mode_oid = "1.0.15628.4.1.99.0"
         target_name = list(target.keys())[0]
         target_mode = list(target.values())[0]
         print(f"Setting RSU to {target_name} mode...")
@@ -1035,12 +1035,15 @@ class RSUConfigurationApp(tk.Tk):
             raise
 
     def _set_standby(self) -> None:
-        """Set RSU to standby mode (2)."""
+        """Set RSU to standby mode. NTCIP 1218: 2, RSU 4.1: 2."""
         self._set_rsu_mode({"standby": 2})
 
     def _set_operate(self) -> None:
-        """Set RSU to operate mode (3)."""
-        self._set_rsu_mode({"operate": 3})
+        """Set RSU to operate mode. NTCIP 1218: 3, RSU 4.1: 4."""
+        if self.mode_mib_var.get() == "ntcip1218":
+            self._set_rsu_mode({"operate": 3})
+        else:
+            self._set_rsu_mode({"operate": 4})
 
     def _show_help(self, tab_name: str, content: str) -> None:
         """Show a help window for the given tab."""
@@ -1134,8 +1137,10 @@ class RSUConfigurationApp(tk.Tk):
     def _destroy_entry(self, delete_oid: str, entry_widget: ttk.Entry, button_widget: ttk.Button) -> None:
         """Destroy entry for the given oid and update given UI row."""
         try:
+            self._set_standby()
             session = self._get_session()
             session.set((delete_oid, Integer32(6))) # This OID (RowStatus) uses INTEGER32. 6 = destroy
+            self._set_operate()
             # Remove the row from UI
             entry_widget.destroy()
             button_widget.destroy()
