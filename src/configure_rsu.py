@@ -1088,14 +1088,14 @@ class RSUConfigurationApp(tk.Tk):
             "DES": DesCbc,
             "AES": AesCfb128,
         }
-        
+
         auth_protocol = auth_protocol_map.get(self.auth_protocol_var.get(), HmacSha)
         priv_protocol = priv_protocol_map.get(self.privacy_protocol_var.get(), AesCfb128)
-        
+
         username = self.snmpv3_user_var.get()
         auth_password = self.auth_password_var.get()
         priv_password = self.privacy_password_var.get()
-        
+
         # Add user to engine if not already added
         try:
             snmp_engine.addUser(
@@ -1108,7 +1108,7 @@ class RSUConfigurationApp(tk.Tk):
         except Exception:
             # User may already exist; ignore error
             pass
-        
+
         # Create and return manager
         hostname = self.hostname_var.get()
         port = self.port_var.get()
