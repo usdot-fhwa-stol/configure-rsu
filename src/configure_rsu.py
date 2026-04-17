@@ -937,7 +937,7 @@ class RSUConfigurationApp(tk.Tk):
                 )
                 hex_data = amf.encode('utf-8')
                 sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                sk.sendto(hex_data, (self.hostname_var.get(), self.port_var.get()))
+                sk.sendto(hex_data, (self.amf_rsu_var.get(), self.amf_port_var.get()))
                 messagebox.showinfo("AMF Sent", "Active Message File has been sent to the RSU.")
             except Exception as e:
                 messagebox.showerror("Error Sending AMF", f"Failed to send Active Message File:\n{e}")
