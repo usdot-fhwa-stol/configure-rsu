@@ -285,6 +285,8 @@ Version=0.7
 Type=<Type>
 #
 # Message PSID as a 2 Byte Hex value (e.g. 8003)
+# List of PSIDs can be found here: https://standards.ieee.org/products-programs/regauth/psid/public/
+# Use the P-encoded column.
 PSID=<PSID>
 #
 # Message Priority in the range of 0 (lowest) through 7
