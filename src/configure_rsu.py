@@ -7,6 +7,7 @@ from snmp.security.usm.auth import HmacMd5, HmacSha, HmacSha256, HmacSha512
 from snmp.security.usm.priv import DesCbc, AesCfb128
 from snmp.smi import OctetString, Integer32
 import os
+import socket
 from dotenv import load_dotenv
 from binascii import unhexlify
 import cr_helper
@@ -39,6 +40,7 @@ class RSUConfigurationApp(tk.Tk):
         self.create_immediate_forward_tab(notebook)
         self.create_received_message_forward_tab(notebook)
         self.create_store_and_repeat_tab(notebook)
+        self.create_active_message_tab(notebook)
 
     def create_credentials_tab(self, notebook):
         """Create the SNMP Credentials tab"""
@@ -82,6 +84,31 @@ class RSUConfigurationApp(tk.Tk):
         ttk.Label(body, text="Privacy Password:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
         self.privacy_password_var = tk.StringVar(value=PRIV_PASSWORD if PRIV_PASSWORD else "privpass")
         ttk.Entry(body, textvariable=self.privacy_password_var, show="*").grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
+
+        # MIB version toggle for RSU mode OIDs
+        r += 1
+        mode_mib_frame = ttk.Frame(body)
+        mode_mib_frame.grid(row=r, column=0, columnspan=4, sticky='w', padx=6, pady=6)
+        ttk.Label(mode_mib_frame, text="RSU Mode MIB:").pack(side='left', padx=(0, 6))
+        self.mode_mib_var = tk.StringVar(value="ntcip1218")
+        self.btn_mode_ntcip = tk.Button(mode_mib_frame, text="NTCIP 1218", relief='sunken', padx=10, pady=4,
+                                        bg='#d0d0d0', activebackground='#d0d0d0')
+        self.btn_mode_rsu41 = tk.Button(mode_mib_frame, text="RSU 4.1", relief='raised', padx=10, pady=4,
+                                        bg='#f0f0f0', activebackground='#f0f0f0')
+        self.btn_mode_ntcip.pack(side='left')
+        self.btn_mode_rsu41.pack(side='left')
+
+        def toggle_mode_mib(selection: str) -> None:
+            self.mode_mib_var.set(selection)
+            if selection == "ntcip1218":
+                self.btn_mode_ntcip.configure(relief='sunken', bg='#d0d0d0')
+                self.btn_mode_rsu41.configure(relief='raised', bg='#f0f0f0')
+            else:
+                self.btn_mode_ntcip.configure(relief='raised', bg='#f0f0f0')
+                self.btn_mode_rsu41.configure(relief='sunken', bg='#d0d0d0')
+
+        self.btn_mode_ntcip.configure(command=lambda: toggle_mode_mib("ntcip1218"))
+        self.btn_mode_rsu41.configure(command=lambda: toggle_mode_mib("rsu41"))
 
         # Buttons
         r += 1
@@ -129,16 +156,24 @@ class RSUConfigurationApp(tk.Tk):
         # Storage for IFM entry configurations
         ifm_entries = []
 
+        def update_field_states() -> None:
+            """Enable/disable fields based on selected MIB version."""
+            is_ntcip = self.mode_mib_var.get() == "ntcip1218"
+            for entry in ifm_entries:
+                ntcip_state = 'normal' if is_ntcip else 'disabled'
+                rsu41_state = 'disabled' if is_ntcip else 'normal'
+                for w in entry.get('ntcip_widgets', []):
+                    w.configure(state=ntcip_state)
+                for w in entry.get('rsu41_widgets', []):
+                    w.configure(state=rsu41_state)
+
         def set_single_ifm_entry(entry_vars: dict, ifm_index: int) -> None:
             """Configure a single IFM entry."""
             try:
-                # Get values from the form
+                # Get common values from the form
                 psid = entry_vars['psid'].get().strip()
                 channel = entry_vars['channel'].get()
                 enable = entry_vars['enable'].get()
-                priority = entry_vars['priority'].get()
-                options = entry_vars['options'].get().strip()
-                payload = entry_vars['payload'].get().strip()
 
                 # Validate inputs
                 if not psid:
@@ -146,21 +181,38 @@ class RSUConfigurationApp(tk.Tk):
                     return
 
                 # RSU must be in standby mode to accept configuration changes
-                self._set_standby() 
+                self._set_standby()
 
                 # Configure the entry using SET operations
                 print(f"Configuring IFM entry {ifm_index}")
                 session = self._get_session()
-                base_oid = f"1.3.6.1.4.1.1206.4.2.18.4.2.1"
-                session.set(
-                    (f"{base_oid}.2.{ifm_index}", OctetString(unhexlify(psid))),      # rsuIFMPsid (octet string as hex)
-                    (f"{base_oid}.3.{ifm_index}", Integer32(int(channel))),           # rsuIFMTxChannel (integer)
-                    (f"{base_oid}.4.{ifm_index}", Integer32(int(enable))),            # rsuIFMEnable
-                    (f"{base_oid}.5.{ifm_index}", Integer32(4)),                      # rsuIFMStatus (4=createAndGo)
-                    (f"{base_oid}.6.{ifm_index}", Integer32(int(priority))),          # rsuIFMPriority
-                    (f"{base_oid}.7.{ifm_index}", OctetString(unhexlify(options))),   # rsuIFMOptions (bits)
-                    (f"{base_oid}.8.{ifm_index}", OctetString(unhexlify(payload)))    # rsuIFMPayload (hex)
-                )
+
+                if self.mode_mib_var.get() == "ntcip1218":
+                    priority = entry_vars['priority'].get()
+                    options = entry_vars['options'].get().strip()
+                    payload = entry_vars['payload'].get().strip()
+                    base_oid = "1.3.6.1.4.1.1206.4.2.18.4.2.1"
+                    session.set(
+                        (f"{base_oid}.2.{ifm_index}", OctetString(unhexlify(psid))),      # rsuIFMPsid (octet string as hex)
+                        (f"{base_oid}.3.{ifm_index}", Integer32(int(channel))),           # rsuIFMTxChannel (integer)
+                        (f"{base_oid}.4.{ifm_index}", Integer32(int(enable))),            # rsuIFMEnable
+                        (f"{base_oid}.5.{ifm_index}", Integer32(4)),                      # rsuIFMStatus (4=createAndGo)
+                        (f"{base_oid}.6.{ifm_index}", Integer32(int(priority))),          # rsuIFMPriority
+                        (f"{base_oid}.7.{ifm_index}", OctetString(unhexlify(options))),   # rsuIFMOptions (bits)
+                        (f"{base_oid}.8.{ifm_index}", OctetString(unhexlify(payload)))    # rsuIFMPayload (hex)
+                    )
+                else:
+                    dsrc_msg_id = entry_vars['dsrc_msg_id'].get()
+                    tx_mode = entry_vars['tx_mode'].get()
+                    base_oid = "1.0.15628.4.1.5.1"
+                    session.set(
+                        (f"{base_oid}.2.{ifm_index}", OctetString(unhexlify(psid))),      # rsuIFMPsid
+                        (f"{base_oid}.3.{ifm_index}", Integer32(int(dsrc_msg_id))),       # rsuIFMDsrcMsgId
+                        (f"{base_oid}.4.{ifm_index}", Integer32(int(tx_mode))),           # rsuIFMTxMode
+                        (f"{base_oid}.5.{ifm_index}", Integer32(int(channel))),           # rsuIFMTxChannel
+                        (f"{base_oid}.6.{ifm_index}", Integer32(int(enable))),            # rsuIFMEnable
+                        (f"{base_oid}.7.{ifm_index}", Integer32(4))                       # rsuIFMStatus (4=createAndGo)
+                    )
 
                 # Return RSU to operate mode
                 self._set_operate()
@@ -193,16 +245,20 @@ class RSUConfigurationApp(tk.Tk):
                                           '8003' if idx_val == 2 else 
                                           '8010' if idx_val == 3 else 
                                           '0027' if idx_val == 4 else 'E0000017'),
-                'channel': tk.IntVar(value=183),
+                'channel': tk.IntVar(value=180 if self.mode_mib_var.get() == "rsu41" else 183),
                 'enable': tk.IntVar(value=1),
                 'priority': tk.IntVar(value=5),
                 'options': tk.StringVar(value='00'),
                 'payload': tk.StringVar(value=''),
+                'dsrc_msg_id': tk.IntVar(value=31),
+                'tx_mode': tk.IntVar(value=0),
                 'frame': entry_frame,
-                'index': idx_val
+                'index': idx_val,
+                'ntcip_widgets': [],
+                'rsu41_widgets': [],
             }
 
-            # Row 0: Index and PSID
+            # Row 0: Index and PSID (common)
             ttk.Label(entry_frame, text="IFM Index:").grid(row=0, column=0, sticky='e', padx=4, pady=2)
             def on_index_change(*_args):
                 # Gracefully handle empty/non-integer input while typing
@@ -223,31 +279,47 @@ class RSUConfigurationApp(tk.Tk):
             ttk.Label(entry_frame, text="PSID (hex):").grid(row=0, column=2, sticky='e', padx=4, pady=2)
             ttk.Entry(entry_frame, textvariable=entry_vars['psid'], width=15).grid(row=0, column=3, sticky='ew', padx=4, pady=2)
 
-            # Row 1: Channel and Priority
+            # Row 1: Channel and Enable (common)
             ttk.Label(entry_frame, text="Channel:").grid(row=1, column=0, sticky='e', padx=4, pady=2)
             ttk.Entry(entry_frame, textvariable=entry_vars['channel'], width=10, state="readonly").grid(row=1, column=1, sticky='w', padx=4, pady=2)
-            ttk.Label(entry_frame, text="Priority:").grid(row=1, column=2, sticky='e', padx=4, pady=2)
-            ttk.Entry(entry_frame, textvariable=entry_vars['priority'], width=10).grid(row=1, column=3, sticky='ew', padx=4, pady=2)
+            ttk.Label(entry_frame, text="Enable (0/1):").grid(row=1, column=2, sticky='e', padx=4, pady=2)
+            ttk.Entry(entry_frame, textvariable=entry_vars['enable'], width=10, state="readonly").grid(row=1, column=3, sticky='ew', padx=4, pady=2)
 
-            # Row 2: Enable and Options
-            ttk.Label(entry_frame, text="Enable (0/1):").grid(row=2, column=0, sticky='e', padx=4, pady=2)
-            ttk.Entry(entry_frame, textvariable=entry_vars['enable'], width=10, state="readonly").grid(row=2, column=1, sticky='w', padx=4, pady=2)
-            ttk.Label(entry_frame, text="Options (hex):").grid(row=2, column=2, sticky='e', padx=4, pady=2)
-            ttk.Entry(entry_frame, textvariable=entry_vars['options'], width=15).grid(row=2, column=3, sticky='ew', padx=4, pady=2)
+            # Row 2: DSRC Msg ID and TX Mode (RSU 4.1 only — greyed out for NTCIP 1218)
+            ttk.Label(entry_frame, text="DSRC Msg ID:").grid(row=2, column=0, sticky='e', padx=4, pady=2)
+            ent_dsrc = ttk.Entry(entry_frame, textvariable=entry_vars['dsrc_msg_id'], width=10)
+            ent_dsrc.grid(row=2, column=1, sticky='w', padx=4, pady=2)
+            ttk.Label(entry_frame, text="TX Mode:").grid(row=2, column=2, sticky='e', padx=4, pady=2)
+            ent_txmode = ttk.Entry(entry_frame, textvariable=entry_vars['tx_mode'], width=10)
+            ent_txmode.grid(row=2, column=3, sticky='ew', padx=4, pady=2)
+            entry_vars['rsu41_widgets'] = [ent_dsrc, ent_txmode]
 
-            # Row 3: Payload
-            ttk.Label(entry_frame, text="Payload (hex):").grid(row=3, column=0, sticky='e', padx=4, pady=2)
-            ttk.Entry(entry_frame, textvariable=entry_vars['payload'], width=20).grid(row=3, column=1, columnspan=3, sticky='ew', padx=4, pady=2)
+            # Row 3: Priority and Options (NTCIP 1218 only — greyed out for RSU 4.1)
+            ttk.Label(entry_frame, text="Priority:").grid(row=3, column=0, sticky='e', padx=4, pady=2)
+            ent_priority = ttk.Entry(entry_frame, textvariable=entry_vars['priority'], width=10)
+            ent_priority.grid(row=3, column=1, sticky='w', padx=4, pady=2)
+            ttk.Label(entry_frame, text="Options (hex):").grid(row=3, column=2, sticky='e', padx=4, pady=2)
+            ent_options = ttk.Entry(entry_frame, textvariable=entry_vars['options'], width=15)
+            ent_options.grid(row=3, column=3, sticky='ew', padx=4, pady=2)
 
-            # Row 4: Button frame for Set and Remove buttons
+            # Row 4: Payload (NTCIP 1218 only — greyed out for RSU 4.1)
+            ttk.Label(entry_frame, text="Payload (hex):").grid(row=4, column=0, sticky='e', padx=4, pady=2)
+            ent_payload = ttk.Entry(entry_frame, textvariable=entry_vars['payload'], width=20)
+            ent_payload.grid(row=4, column=1, columnspan=3, sticky='ew', padx=4, pady=2)
+            entry_vars['ntcip_widgets'] = [ent_priority, ent_options, ent_payload]
+
+            # Row 5: Button frame for Set and Remove buttons
             button_frame = ttk.Frame(entry_frame)
-            button_frame.grid(row=4, column=0, columnspan=4, pady=4)
+            button_frame.grid(row=5, column=0, columnspan=4, pady=4)
             set_btn = ttk.Button(button_frame, text="Set Entry", command=lambda: set_single_ifm_entry(entry_vars, entry_vars['index']))
             set_btn.pack(side='left', padx=4)
             remove_btn = ttk.Button(button_frame, text="Remove Entry", command=lambda: remove_ifm_entry(entry_vars))
             remove_btn.pack(side='left', padx=4)
 
             ifm_entries.append(entry_vars)
+
+            # Apply current MIB field states to the new entry
+            update_field_states()
 
         def remove_ifm_entry(entry_vars: dict) -> None:
             """Remove an IFM entry form."""
@@ -259,7 +331,10 @@ class RSUConfigurationApp(tk.Tk):
 
         def destroy_ifm_entry(idx: int, entry_widget: ttk.Entry, button_widget: ttk.Button) -> None:
             """Destroy IFM entry for the given index and update given UI row."""
-            delete_ifm_oid = f"1.3.6.1.4.1.1206.4.2.18.4.2.1.5.{idx}"
+            if self.mode_mib_var.get() == "ntcip1218":
+                delete_ifm_oid = f"1.3.6.1.4.1.1206.4.2.18.4.2.1.5.{idx}"
+            else:
+                delete_ifm_oid = f"1.0.15628.4.1.5.1.7.{idx}"
             self._destroy_entry(delete_ifm_oid, entry_widget, button_widget)
             # Refresh entries by running get operation
             get_ifm_info()
@@ -272,11 +347,15 @@ class RSUConfigurationApp(tk.Tk):
             # Enable the "Add IFM Entry" button after first Get
             add_ifm_btn.configure(state='normal')
 
+            if self.mode_mib_var.get() == "ntcip1218":
+                base_oid = "1.3.6.1.4.1.1206.4.2.18.4.2.1"
+            else:
+                base_oid = "1.0.15628.4.1.5.1"
 
             session = self._get_session()
             current_row = 0
             for i in range(1, 7):
-                get_oid = f"1.3.6.1.4.1.1206.4.2.18.4.2.1.2.{i}"
+                get_oid = f"{base_oid}.2.{i}"
                 try:
                     handle = session.get(get_oid)
                     varbind_list = handle.wait() if hasattr(handle, 'wait') else handle  # type: ignore
@@ -301,7 +380,9 @@ class RSUConfigurationApp(tk.Tk):
                     btn.grid(row=current_row, column=1, sticky='w', padx=4, pady=2)
                     current_row += 1
                     messagebox.showerror("SNMP Error", str(e))
-                    messagebox.showerror("SNMP Error", str(e))
+
+        # Update IFM field states when MIB selection changes in credentials tab
+        self.mode_mib_var.trace_add('write', lambda *_: update_field_states())
 
         # Create buttons with "Add IFM Entry" initially disabled
         add_ifm_btn = ttk.Button(controls, text="Add IFM Entry", command=add_ifm_entry, state='disabled')
@@ -697,7 +778,7 @@ class RSUConfigurationApp(tk.Tk):
             entry_vars = {
                 'index_var': index_var,
                 'psid': tk.StringVar(value='8002'),
-                'channel': tk.IntVar(value=183),
+                'channel': tk.IntVar(value=180 if self.mode_mib_var.get() == "rsu41" else 183),
                 'interval': tk.IntVar(value=1000),
                 'start_date': tk.StringVar(value='2025-01-01,00:00:00.0'),
                 'stop_date': tk.StringVar(value='2030-01-01,00:00:00.0'),
@@ -782,6 +863,92 @@ class RSUConfigurationApp(tk.Tk):
         ttk.Button(controls, text="Get SRM Info", command=get_srm_info).pack(side='left', padx=6)
         ttk.Button(controls, text="Help", command=lambda: self._show_help("Store-and-Repeat", cr_helper.get_srm_help_content())).pack(side='left', padx=6)
 
+    def create_active_message_tab(self, notebook):
+        """Create the Active Message tab"""
+        am_tab = ttk.Frame(notebook, padding=12)
+        notebook.add(am_tab, text="Send Active Message")
+
+        # Layout config
+        am_tab.columnconfigure(1, weight=1)
+        am_tab.columnconfigure(2, weight=1)
+
+        # AMF input fields
+        r = 0
+        ttk.Label(am_tab, text="RSU IP Address:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
+        self.amf_rsu_var = tk.StringVar(value="192.168.55.20")
+        ttk.Entry(am_tab, textvariable=self.amf_rsu_var).grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
+        r += 1
+        ttk.Label(am_tab, text="RSU IFM Port:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
+        self.amf_port_var = tk.IntVar(value=1516)
+        ttk.Entry(am_tab, textvariable=self.amf_port_var).grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
+        r += 1
+        ttk.Label(am_tab, text="Message Type:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
+        self.msg_type_var = tk.StringVar(value="MAP")
+        ttk.Combobox(am_tab, textvariable=self.msg_type_var, values=["MAP", "SPAT", "BSM", "SRM", "SSM", "TIM", "PSM", "RSM", "SDSM"]).grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
+        r += 1
+        ttk.Label(am_tab, text="PSID:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
+        self.psid_var = tk.StringVar(value="8002")
+        ttk.Entry(am_tab, textvariable=self.psid_var).grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
+        r += 1
+        ttk.Label(am_tab, text="Priority:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
+        self.priority_var = tk.IntVar(value=3)
+        ttk.Entry(am_tab, textvariable=self.priority_var).grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
+        r += 1
+        ttk.Label(am_tab, text="Tx Mode:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
+        self.tx_mode_var = tk.StringVar(value="CONT")
+        ttk.Combobox(am_tab, textvariable=self.tx_mode_var, values=["CONT", "ALT"]).grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
+        r += 1
+        ttk.Label(am_tab, text="Tx Channel:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
+        self.tx_channel_var = tk.IntVar(value=183)
+        ttk.Entry(am_tab, textvariable=self.tx_channel_var, state="readonly").grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
+        r += 1
+        ttk.Label(am_tab, text="Tx Interval:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
+        self.tx_interval_var = tk.IntVar(value=0)
+        ttk.Entry(am_tab, textvariable=self.tx_interval_var, state="readonly").grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
+        r += 1
+        ttk.Label(am_tab, text="Signature:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
+        self.signature_var = tk.StringVar(value="False")
+        ttk.Combobox(am_tab, textvariable=self.signature_var, values=["True", "False"]).grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
+        r += 1
+        ttk.Label(am_tab, text="Encryption:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
+        self.encryption_var = tk.StringVar(value="False")
+        ttk.Combobox(am_tab, textvariable=self.encryption_var, values=["True", "False"]).grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
+        r += 1
+        ttk.Label(am_tab, text="Payload:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
+        self.payload_var = tk.StringVar(value="")
+        ttk.Entry(am_tab, textvariable=self.payload_var).grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
+
+        def send_amf() -> None:
+            """Send an Active Message File (AMF) to the RSU using UDP"""
+            try:
+                amf = (
+                f"Version=0.7\n"
+                f"Type={self.msg_type_var.get()}\n"
+                f"PSID={self.psid_var.get()}\n"
+                f"Priority={self.priority_var.get()}\n"
+                f"TxMode={self.tx_mode_var.get()}\n"
+                f"TxChannel={self.tx_channel_var.get()}\n"
+                f"TxInterval={self.tx_interval_var.get()}\n"
+                f"DeliveryStart=\n"
+                f"DeliveryStop=\n"
+                f"Signature={self.signature_var.get()}\n"
+                f"Encryption={self.encryption_var.get()}\n"
+                f"Payload={self.payload_var.get()}"
+                )
+                hex_data = amf.encode('utf-8')
+                sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                sk.sendto(hex_data, (self.amf_rsu_var.get(), self.amf_port_var.get()))
+                messagebox.showinfo("AMF Sent", "Active Message File has been sent to the RSU.")
+            except Exception as e:
+                messagebox.showerror("Error Sending AMF", f"Failed to send Active Message File:\n{e}")
+
+        # Buttons
+        r += 1
+        button_frame = ttk.Frame(am_tab)
+        button_frame.grid(row=r, column=0, columnspan=4, sticky='ew', padx=6, pady=6)
+        ttk.Button(button_frame, text="Send Message", command=send_amf).pack(side='right', padx=6)
+        ttk.Button(button_frame, text="Help", command=lambda: self._show_help("Send Active Message", cr_helper.get_amf_help_content())).pack(side='right', padx=6)
+
     # Methods
     def _get_rsu_mode(self) -> int:
         """Get RSU mode.
@@ -789,7 +956,10 @@ class RSUConfigurationApp(tk.Tk):
         Returns:
             int: Current RSU mode value. 1=other, 2=standby, 3=operate
         """
-        mode_oid = "1.3.6.1.4.1.1206.4.2.18.16.2.0"
+        if self.mode_mib_var.get() == "ntcip1218":
+            mode_oid = "1.3.6.1.4.1.1206.4.2.18.16.2.0"
+        else:
+            mode_oid = "1.0.15628.4.1.99.0"
         try:
             session = self._get_session()
             handle = session.get(mode_oid)
@@ -825,7 +995,10 @@ class RSUConfigurationApp(tk.Tk):
 
     def _set_rsu_mode(self, target: Dict[str, int]) -> None:
         """Set RSU to target mode."""
-        mode_oid = "1.3.6.1.4.1.1206.4.2.18.16.2.0"
+        if self.mode_mib_var.get() == "ntcip1218":
+            mode_oid = "1.3.6.1.4.1.1206.4.2.18.16.2.0"
+        else:
+            mode_oid = "1.0.15628.4.1.99.0"
         target_name = list(target.keys())[0]
         target_mode = list(target.values())[0]
         print(f"Setting RSU to {target_name} mode...")
@@ -862,12 +1035,15 @@ class RSUConfigurationApp(tk.Tk):
             raise
 
     def _set_standby(self) -> None:
-        """Set RSU to standby mode (2)."""
+        """Set RSU to standby mode. NTCIP 1218: 2, RSU 4.1: 2."""
         self._set_rsu_mode({"standby": 2})
 
     def _set_operate(self) -> None:
-        """Set RSU to operate mode (3)."""
-        self._set_rsu_mode({"operate": 3})
+        """Set RSU to operate mode. NTCIP 1218: 3, RSU 4.1: 4."""
+        if self.mode_mib_var.get() == "ntcip1218":
+            self._set_rsu_mode({"operate": 3})
+        else:
+            self._set_rsu_mode({"operate": 4})
 
     def _show_help(self, tab_name: str, content: str) -> None:
         """Show a help window for the given tab."""
@@ -912,14 +1088,14 @@ class RSUConfigurationApp(tk.Tk):
             "DES": DesCbc,
             "AES": AesCfb128,
         }
-        
+
         auth_protocol = auth_protocol_map.get(self.auth_protocol_var.get(), HmacSha)
         priv_protocol = priv_protocol_map.get(self.privacy_protocol_var.get(), AesCfb128)
-        
+
         username = self.snmpv3_user_var.get()
         auth_password = self.auth_password_var.get()
         priv_password = self.privacy_password_var.get()
-        
+
         # Add user to engine if not already added
         try:
             snmp_engine.addUser(
@@ -932,7 +1108,7 @@ class RSUConfigurationApp(tk.Tk):
         except Exception:
             # User may already exist; ignore error
             pass
-        
+
         # Create and return manager
         hostname = self.hostname_var.get()
         port = self.port_var.get()
@@ -961,8 +1137,10 @@ class RSUConfigurationApp(tk.Tk):
     def _destroy_entry(self, delete_oid: str, entry_widget: ttk.Entry, button_widget: ttk.Button) -> None:
         """Destroy entry for the given oid and update given UI row."""
         try:
+            self._set_standby()
             session = self._get_session()
             session.set((delete_oid, Integer32(6))) # This OID (RowStatus) uses INTEGER32. 6 = destroy
+            self._set_operate()
             # Remove the row from UI
             entry_widget.destroy()
             button_widget.destroy()
