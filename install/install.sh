@@ -9,7 +9,7 @@ PYTHON_BIN=${PYTHON:-python3}
 # Dependencies
 dependencies="python3 \
     python3-pip \
-    python3-tk"
+    python3-pyqt6"
 
 # Install dependencies, packages
 sudo apt-get install -y $dependencies

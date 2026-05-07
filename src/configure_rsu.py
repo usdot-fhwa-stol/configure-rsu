@@ -1,15 +1,28 @@
 #!/usr/bin/env python3
-import tkinter as tk
-from tkinter import messagebox, ttk
-from typing import Dict
+import os
+import socket
+import sys
+from binascii import unhexlify
+from typing import Any, Callable, Dict, List, Optional
+
+from PyQt6.QtCore import (
+    QObject, QRegularExpression, QRunnable, Qt, QThreadPool, pyqtSignal, pyqtSlot,
+)
+from PyQt6.QtGui import QBrush, QColor, QRegularExpressionValidator
+from PyQt6.QtWidgets import (
+    QAbstractItemView, QAbstractSpinBox, QApplication, QButtonGroup, QComboBox,
+    QDialog, QFormLayout, QGridLayout, QGroupBox, QHBoxLayout, QHeaderView,
+    QLabel, QLineEdit, QMainWindow, QMessageBox, QPushButton, QScrollArea,
+    QSpinBox, QTableWidget, QTableWidgetItem, QTabWidget, QTextEdit,
+    QVBoxLayout, QWidget,
+)
+
+from dotenv import load_dotenv
 from snmp import Engine, Timeout, ErrorResponse
 from snmp.security.usm.auth import HmacMd5, HmacSha, HmacSha256, HmacSha512
 from snmp.security.usm.priv import DesCbc, AesCfb128
 from snmp.smi import OctetString, Integer32
-import os
-import socket
-from dotenv import load_dotenv
-from binascii import unhexlify
+
 import cr_helper
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env'))
@@ -24,1060 +37,1158 @@ SNMP_USER = os.getenv('SNMP_USER')
 AUTH_PASSWORD = os.getenv('AUTH_PASSWORD')
 PRIV_PASSWORD = os.getenv('PRIV_PASSWORD')
 
-class RSUConfigurationApp(tk.Tk):
+ALIGN_RIGHT = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+HEX_REGEX = QRegularExpression(r'^[0-9A-Fa-f]*$')
+
+
+def _hex_validator() -> QRegularExpressionValidator:
+    return QRegularExpressionValidator(HEX_REGEX)
+
+
+def _make_spinbox(value: int, lo: int, hi: int, readonly: bool = False) -> QSpinBox:
+    sb = QSpinBox()
+    sb.setRange(lo, hi)
+    sb.setValue(value)
+    if readonly:
+        sb.setReadOnly(True)
+        sb.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+    return sb
+
+
+def _make_hex_edit(value: str = "") -> QLineEdit:
+    le = QLineEdit(value)
+    le.setValidator(_hex_validator())
+    return le
+
+
+# ---------- Async worker plumbing ----------
+
+class _TaskSignals(QObject):
+    finished = pyqtSignal(object)
+    error = pyqtSignal(object)
+
+
+class _Task(QRunnable):
+    def __init__(self, fn: Callable[[], Any]):
+        super().__init__()
+        self._fn = fn
+        self.signals = _TaskSignals()
+
+    @pyqtSlot()
+    def run(self) -> None:
+        try:
+            result = self._fn()
+        except BaseException as e:
+            self.signals.error.emit(e)
+            return
+        self.signals.finished.emit(result)
+
+
+class RSUConfigurationApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.title("RSU Configuration")
-        self.geometry("900x700")
-        self.resizable(True, True)
+        self.setWindowTitle("RSU Configuration")
+        self.resize(900, 700)
 
-        # Create notebook for tabs
-        notebook = ttk.Notebook(self)
-        notebook.pack(fill='both', expand=True, padx=12, pady=12)
+        # RSU Mode MIB selection ("ntcip1218" or "rsu41")
+        self.mode_mib = "ntcip1218"
+        self._mode_mib_callbacks: List[Callable[[], None]] = []
 
-        # Create tabs
-        self.create_credentials_tab(notebook)
-        self.create_immediate_forward_tab(notebook)
-        self.create_received_message_forward_tab(notebook)
-        self.create_store_and_repeat_tab(notebook)
-        self.create_active_message_tab(notebook)
+        # Serialize SNMP ops on a single background worker thread so the
+        # UI stays responsive and SNMP state transitions don't interleave.
+        self._snmp_pool = QThreadPool()
+        self._snmp_pool.setMaxThreadCount(1)
 
-    def create_credentials_tab(self, notebook):
-        """Create the SNMP Credentials tab"""
-        body = ttk.Frame(notebook, padding=12)
-        notebook.add(body, text="SNMP Credentials")
+        # Tabs
+        self.tabs = QTabWidget()
+        self.setCentralWidget(self.tabs)
+        self._create_credentials_tab()
+        self._create_immediate_forward_tab()
+        self._create_received_message_forward_tab()
+        self._create_store_and_repeat_tab()
+        self._create_active_message_tab()
 
-        # Make grid resizable
-        body.columnconfigure(1, weight=1)
-        body.columnconfigure(2, weight=1)
+    # ---------- Mode MIB helpers ----------
+    def _set_mode_mib(self, value: str) -> None:
+        self.mode_mib = value
+        self.btn_mode_ntcip.setChecked(value == "ntcip1218")
+        self.btn_mode_rsu41.setChecked(value == "rsu41")
+        for cb in self._mode_mib_callbacks:
+            try:
+                cb()
+            except Exception:
+                pass
 
-        # SNMP session input fields
-        r = 0
-        ttk.Label(body, text="RSU IP Address:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
-        self.hostname_var = tk.StringVar(value=IP_ADDRESS if IP_ADDRESS else "192.168.55.20")
-        ttk.Entry(body, textvariable=self.hostname_var).grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
-        r += 1
-        ttk.Label(body, text="RSU SNMP Port:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
-        self.port_var = tk.IntVar(value=SNMP_PORT if SNMP_PORT else 161)
-        ttk.Entry(body, textvariable=self.port_var).grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
-        r += 1
-        ttk.Label(body, text="SNMPv3 Username:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
-        self.snmpv3_user_var = tk.StringVar(value=SNMP_USER if SNMP_USER else "snmpuser")
-        ttk.Entry(body, textvariable=self.snmpv3_user_var).grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
-        r += 1
-        ttk.Label(body, text="Security Level:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
-        self.security_level_var = tk.StringVar(value="authPriv")
-        ttk.Combobox(body, textvariable=self.security_level_var, values=["noAuthNoPriv", "authNoPriv", "authPriv"]).grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
-        r += 1
-        ttk.Label(body, text="Auth Protocol:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
-        self.auth_protocol_var = tk.StringVar(value="SHA")
-        ttk.Combobox(body, textvariable=self.auth_protocol_var, values=["MD5", "SHA", "SHA256", "SHA512"]).grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
-        r += 1
-        ttk.Label(body, text="Auth Password:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
-        self.auth_password_var = tk.StringVar(value=AUTH_PASSWORD if AUTH_PASSWORD else "authpass")
-        ttk.Entry(body, textvariable=self.auth_password_var, show="*").grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
-        r += 1
-        ttk.Label(body, text="Privacy Protocol:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
-        self.privacy_protocol_var = tk.StringVar(value="AES")
-        ttk.Combobox(body, textvariable=self.privacy_protocol_var, values=["DES", "AES"]).grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
-        r += 1
-        ttk.Label(body, text="Privacy Password:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
-        self.privacy_password_var = tk.StringVar(value=PRIV_PASSWORD if PRIV_PASSWORD else "privpass")
-        ttk.Entry(body, textvariable=self.privacy_password_var, show="*").grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
+    def _register_mode_mib_callback(self, cb: Callable[[], None]) -> None:
+        self._mode_mib_callbacks.append(cb)
+
+    # ---------- Async helper ----------
+    def _run_async(
+        self,
+        fn: Callable[[], Any],
+        on_success: Optional[Callable[[Any], None]] = None,
+        on_error: Optional[Callable[[BaseException], None]] = None,
+    ) -> None:
+        task = _Task(fn)
+        if on_success is not None:
+            task.signals.finished.connect(on_success)
+        if on_error is not None:
+            task.signals.error.connect(on_error)
+        self._snmp_pool.start(task)
+
+    # ---------- Credentials tab ----------
+    def _create_credentials_tab(self) -> None:
+        tab = QWidget()
+        outer = QVBoxLayout(tab)
+        outer.setContentsMargins(12, 12, 12, 12)
+
+        form = QFormLayout()
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        outer.addLayout(form)
+
+        self.hostname_edit = QLineEdit(IP_ADDRESS if IP_ADDRESS else "192.168.55.20")
+        form.addRow("RSU IP Address:", self.hostname_edit)
+
+        self.port_spin = _make_spinbox(SNMP_PORT if SNMP_PORT else 161, 1, 65535)
+        form.addRow("RSU SNMP Port:", self.port_spin)
+
+        self.snmpv3_user_edit = QLineEdit(SNMP_USER if SNMP_USER else "snmpuser")
+        form.addRow("SNMPv3 Username:", self.snmpv3_user_edit)
+
+        self.security_level_combo = QComboBox()
+        self.security_level_combo.setEditable(True)
+        self.security_level_combo.addItems(["noAuthNoPriv", "authNoPriv", "authPriv"])
+        self.security_level_combo.setCurrentText("authPriv")
+        form.addRow("Security Level:", self.security_level_combo)
+
+        self.auth_protocol_combo = QComboBox()
+        self.auth_protocol_combo.setEditable(True)
+        self.auth_protocol_combo.addItems(["MD5", "SHA", "SHA256", "SHA512"])
+        self.auth_protocol_combo.setCurrentText("SHA")
+        form.addRow("Auth Protocol:", self.auth_protocol_combo)
+
+        self.auth_password_edit = QLineEdit(AUTH_PASSWORD if AUTH_PASSWORD else "authpass")
+        self.auth_password_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        form.addRow("Auth Password:", self.auth_password_edit)
+
+        self.privacy_protocol_combo = QComboBox()
+        self.privacy_protocol_combo.setEditable(True)
+        self.privacy_protocol_combo.addItems(["DES", "AES"])
+        self.privacy_protocol_combo.setCurrentText("AES")
+        form.addRow("Privacy Protocol:", self.privacy_protocol_combo)
+
+        self.privacy_password_edit = QLineEdit(PRIV_PASSWORD if PRIV_PASSWORD else "privpass")
+        self.privacy_password_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        form.addRow("Privacy Password:", self.privacy_password_edit)
 
         # MIB version toggle for RSU mode OIDs
-        r += 1
-        mode_mib_frame = ttk.Frame(body)
-        mode_mib_frame.grid(row=r, column=0, columnspan=4, sticky='w', padx=6, pady=6)
-        ttk.Label(mode_mib_frame, text="RSU Mode MIB:").pack(side='left', padx=(0, 6))
-        self.mode_mib_var = tk.StringVar(value="ntcip1218")
-        self.btn_mode_ntcip = tk.Button(mode_mib_frame, text="NTCIP 1218", relief='sunken', padx=10, pady=4,
-                                        bg='#d0d0d0', activebackground='#d0d0d0')
-        self.btn_mode_rsu41 = tk.Button(mode_mib_frame, text="RSU 4.1", relief='raised', padx=10, pady=4,
-                                        bg='#f0f0f0', activebackground='#f0f0f0')
-        self.btn_mode_ntcip.pack(side='left')
-        self.btn_mode_rsu41.pack(side='left')
-
-        def toggle_mode_mib(selection: str) -> None:
-            self.mode_mib_var.set(selection)
-            if selection == "ntcip1218":
-                self.btn_mode_ntcip.configure(relief='sunken', bg='#d0d0d0')
-                self.btn_mode_rsu41.configure(relief='raised', bg='#f0f0f0')
-            else:
-                self.btn_mode_ntcip.configure(relief='raised', bg='#f0f0f0')
-                self.btn_mode_rsu41.configure(relief='sunken', bg='#d0d0d0')
-
-        self.btn_mode_ntcip.configure(command=lambda: toggle_mode_mib("ntcip1218"))
-        self.btn_mode_rsu41.configure(command=lambda: toggle_mode_mib("rsu41"))
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(QLabel("RSU Mode MIB:"))
+        self.btn_mode_ntcip = QPushButton("NTCIP 1218")
+        self.btn_mode_ntcip.setCheckable(True)
+        self.btn_mode_ntcip.setChecked(True)
+        self.btn_mode_rsu41 = QPushButton("RSU 4.1")
+        self.btn_mode_rsu41.setCheckable(True)
+        mode_row.addWidget(self.btn_mode_ntcip)
+        mode_row.addWidget(self.btn_mode_rsu41)
+        mode_row.addStretch(1)
+        mode_group = QButtonGroup(self)
+        mode_group.setExclusive(True)
+        mode_group.addButton(self.btn_mode_ntcip)
+        mode_group.addButton(self.btn_mode_rsu41)
+        self.btn_mode_ntcip.clicked.connect(lambda: self._set_mode_mib("ntcip1218"))
+        self.btn_mode_rsu41.clicked.connect(lambda: self._set_mode_mib("rsu41"))
+        outer.addLayout(mode_row)
 
         # Buttons
-        r += 1
-        button_frame = ttk.Frame(body)
-        button_frame.grid(row=r, column=0, columnspan=4, sticky='ew', padx=6, pady=6)
-        ttk.Button(button_frame, text="Test Connection", command=self._test_connection).pack(side='left', padx=6)
-        ttk.Button(button_frame, text="Get RSU Mode Status", command=self._get_rsu_mode_status).pack(side='left', padx=6)
-        ttk.Button(button_frame, text="Quit", command=self.quit).pack(side='right', padx=6)
-        ttk.Button(button_frame, text="Help", command=lambda: self._show_help("SNMP Credentials", "")).pack(side='right', padx=6)
+        button_row = QHBoxLayout()
+        test_btn = QPushButton("Test Connection")
+        test_btn.clicked.connect(self._test_connection)
+        button_row.addWidget(test_btn)
+        mode_status_btn = QPushButton("Get RSU Mode Status")
+        mode_status_btn.clicked.connect(self._get_rsu_mode_status)
+        button_row.addWidget(mode_status_btn)
+        button_row.addStretch(1)
+        help_btn = QPushButton("Help")
+        help_btn.clicked.connect(lambda: self._show_help("SNMP Credentials", ""))
+        button_row.addWidget(help_btn)
+        quit_btn = QPushButton("Quit")
+        quit_btn.clicked.connect(QApplication.instance().quit)
+        button_row.addWidget(quit_btn)
+        outer.addLayout(button_row)
 
-        # Label + read-only text widget to show results
-        r += 1
-        results_frame = ttk.LabelFrame(body, text="Results", padding=8)
-        results_frame.grid(row=r, column=0, columnspan=4, sticky='nsew', padx=6, pady=6)
-        body.rowconfigure(r, weight=1)
+        # Results section
+        results_group = QGroupBox("Results")
+        results_layout = QVBoxLayout(results_group)
+        self.results_text = QTextEdit()
+        self.results_text.setReadOnly(True)
+        results_layout.addWidget(self.results_text)
+        outer.addWidget(results_group, 1)
 
-        ttk.Label(results_frame).pack(anchor='w')
-        self.results_text = tk.Text(results_frame, height=6, wrap='word')
-        self.results_text.pack(fill='both', expand=True)
-        self.results_text.configure(state='disabled')
+        self.tabs.addTab(tab, "SNMP Credentials")
 
-    def create_immediate_forward_tab(self, notebook):
-        """Create the Immediate Forward tab"""
-        ifm_tab = ttk.Frame(notebook, padding=12)
-        notebook.add(ifm_tab, text="Immediate Forward")
+    # ---------- Results table helper ----------
+    @staticmethod
+    def _make_results_table(headers: List[str]) -> QTableWidget:
+        table = QTableWidget(0, len(headers))
+        table.setHorizontalHeaderLabels(headers)
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        header = table.horizontalHeader()
+        for i in range(len(headers)):
+            if i == 0 or i == len(headers) - 1:
+                header.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
+            else:
+                header.setSectionResizeMode(i, QHeaderView.ResizeMode.Stretch)
+        return table
 
-        # Layout config
-        ifm_tab.columnconfigure(0, weight=1)
-        ifm_tab.rowconfigure(2, weight=1)
+    @staticmethod
+    def _fill_error_row(table: QTableWidget, row: int, err: str, data_cols: int) -> None:
+        item = QTableWidgetItem(f"error retrieving info: {err}")
+        item.setForeground(QBrush(QColor("#b00020")))
+        table.setItem(row, 1, item)
+        if data_cols > 1:
+            table.setSpan(row, 1, 1, data_cols)
 
-        # Controls row
-        controls = ttk.Frame(ifm_tab)
-        controls.grid(row=0, column=0, sticky='ew', padx=6, pady=6)
+    # ---------- Immediate Forward tab ----------
+    def _create_immediate_forward_tab(self) -> None:
+        tab = QWidget()
+        outer = QVBoxLayout(tab)
+        outer.setContentsMargins(12, 12, 12, 12)
 
-        # Configuration section
-        config_frame = ttk.LabelFrame(ifm_tab, text="Configure IFM Entries", padding=8)
-        config_frame.grid(row=1, column=0, sticky='ew', padx=6, pady=6)
-        config_frame.columnconfigure(0, weight=1)
+        controls = QHBoxLayout()
+        outer.addLayout(controls)
 
-        # Container for IFM rows (display results)
-        rows_frame = ttk.Frame(ifm_tab)
-        rows_frame.grid(row=2, column=0, sticky='nsew', padx=6, pady=6)
-        rows_frame.columnconfigure(0, weight=1)
+        # Configuration section (scrollable container for entries)
+        config_group = QGroupBox("Configure IFM Entries")
+        config_vbox = QVBoxLayout(config_group)
+        config_scroll = QScrollArea()
+        config_scroll.setWidgetResizable(True)
+        config_inner = QWidget()
+        config_inner_layout = QVBoxLayout(config_inner)
+        config_inner_layout.addStretch(1)
+        config_scroll.setWidget(config_inner)
+        config_vbox.addWidget(config_scroll)
+        outer.addWidget(config_group)
 
-        # Storage for IFM entry configurations
-        ifm_entries = []
+        # Results table
+        results_group = QGroupBox("IFM Results")
+        results_layout = QVBoxLayout(results_group)
+        ifm_table = self._make_results_table(["Index", "PSID", ""])
+        results_layout.addWidget(ifm_table)
+        outer.addWidget(results_group, 1)
+
+        ifm_entries: List[dict] = []
 
         def update_field_states() -> None:
-            """Enable/disable fields based on selected MIB version."""
-            is_ntcip = self.mode_mib_var.get() == "ntcip1218"
+            is_ntcip = self.mode_mib == "ntcip1218"
             for entry in ifm_entries:
-                ntcip_state = 'normal' if is_ntcip else 'disabled'
-                rsu41_state = 'disabled' if is_ntcip else 'normal'
                 for w in entry.get('ntcip_widgets', []):
-                    w.configure(state=ntcip_state)
+                    w.setEnabled(is_ntcip)
                 for w in entry.get('rsu41_widgets', []):
-                    w.configure(state=rsu41_state)
+                    w.setEnabled(not is_ntcip)
 
-        def set_single_ifm_entry(entry_vars: dict, ifm_index: int) -> None:
-            """Configure a single IFM entry."""
-            try:
-                # Get common values from the form
-                psid = entry_vars['psid'].get().strip()
-                channel = entry_vars['channel'].get()
-                enable = entry_vars['enable'].get()
+        def set_single_ifm_entry(entry_vars: dict) -> None:
+            ifm_index = entry_vars['index_spin'].value()
+            psid = entry_vars['psid_edit'].text().strip()
+            channel = entry_vars['channel_spin'].value()
+            enable = entry_vars['enable_spin'].value()
+            if not psid:
+                QMessageBox.critical(self, "Validation Error", f"Entry {ifm_index}: PSID cannot be empty")
+                return
 
-                # Validate inputs
-                if not psid:
-                    messagebox.showerror("Validation Error", f"Entry {ifm_index}: PSID cannot be empty")
-                    return
+            if self.mode_mib == "ntcip1218":
+                priority = entry_vars['priority_spin'].value()
+                options = entry_vars['options_edit'].text().strip()
+                payload = entry_vars['payload_edit'].text().strip()
+                mode_mib = "ntcip1218"
+            else:
+                dsrc_msg_id = entry_vars['dsrc_msg_id_spin'].value()
+                tx_mode = entry_vars['tx_mode_spin'].value()
+                mode_mib = "rsu41"
 
-                # RSU must be in standby mode to accept configuration changes
+            def work():
                 self._set_standby()
-
-                # Configure the entry using SET operations
-                print(f"Configuring IFM entry {ifm_index}")
                 session = self._get_session()
-
-                if self.mode_mib_var.get() == "ntcip1218":
-                    priority = entry_vars['priority'].get()
-                    options = entry_vars['options'].get().strip()
-                    payload = entry_vars['payload'].get().strip()
+                if mode_mib == "ntcip1218":
                     base_oid = "1.3.6.1.4.1.1206.4.2.18.4.2.1"
                     session.set(
-                        (f"{base_oid}.2.{ifm_index}", OctetString(unhexlify(psid))),      # rsuIFMPsid (octet string as hex)
-                        (f"{base_oid}.3.{ifm_index}", Integer32(int(channel))),           # rsuIFMTxChannel (integer)
-                        (f"{base_oid}.4.{ifm_index}", Integer32(int(enable))),            # rsuIFMEnable
-                        (f"{base_oid}.5.{ifm_index}", Integer32(4)),                      # rsuIFMStatus (4=createAndGo)
-                        (f"{base_oid}.6.{ifm_index}", Integer32(int(priority))),          # rsuIFMPriority
-                        (f"{base_oid}.7.{ifm_index}", OctetString(unhexlify(options))),   # rsuIFMOptions (bits)
-                        (f"{base_oid}.8.{ifm_index}", OctetString(unhexlify(payload)))    # rsuIFMPayload (hex)
+                        (f"{base_oid}.2.{ifm_index}", OctetString(unhexlify(psid))),
+                        (f"{base_oid}.3.{ifm_index}", Integer32(channel)),
+                        (f"{base_oid}.4.{ifm_index}", Integer32(enable)),
+                        (f"{base_oid}.5.{ifm_index}", Integer32(4)),
+                        (f"{base_oid}.6.{ifm_index}", Integer32(priority)),
+                        (f"{base_oid}.7.{ifm_index}", OctetString(unhexlify(options))),
+                        (f"{base_oid}.8.{ifm_index}", OctetString(unhexlify(payload))),
                     )
                 else:
-                    dsrc_msg_id = entry_vars['dsrc_msg_id'].get()
-                    tx_mode = entry_vars['tx_mode'].get()
                     base_oid = "1.0.15628.4.1.5.1"
                     session.set(
-                        (f"{base_oid}.2.{ifm_index}", OctetString(unhexlify(psid))),      # rsuIFMPsid
-                        (f"{base_oid}.3.{ifm_index}", Integer32(int(dsrc_msg_id))),       # rsuIFMDsrcMsgId
-                        (f"{base_oid}.4.{ifm_index}", Integer32(int(tx_mode))),           # rsuIFMTxMode
-                        (f"{base_oid}.5.{ifm_index}", Integer32(int(channel))),           # rsuIFMTxChannel
-                        (f"{base_oid}.6.{ifm_index}", Integer32(int(enable))),            # rsuIFMEnable
-                        (f"{base_oid}.7.{ifm_index}", Integer32(4))                       # rsuIFMStatus (4=createAndGo)
+                        (f"{base_oid}.2.{ifm_index}", OctetString(unhexlify(psid))),
+                        (f"{base_oid}.3.{ifm_index}", Integer32(dsrc_msg_id)),
+                        (f"{base_oid}.4.{ifm_index}", Integer32(tx_mode)),
+                        (f"{base_oid}.5.{ifm_index}", Integer32(channel)),
+                        (f"{base_oid}.6.{ifm_index}", Integer32(enable)),
+                        (f"{base_oid}.7.{ifm_index}", Integer32(4)),
                     )
-
-                # Return RSU to operate mode
                 self._set_operate()
 
-                messagebox.showinfo("Success", f"Successfully configured IFM entry {ifm_index} with PSID {psid}")
-                # Refresh the display
+            def on_ok(_):
+                QMessageBox.information(self, "Success", f"Successfully configured IFM entry {ifm_index} with PSID {psid}")
                 get_ifm_info()
 
-            except Exception as e:
-                messagebox.showerror("SNMP Error", f"Failed to set IFM entry {ifm_index}: {e}")
+            def on_err(e):
+                QMessageBox.critical(self, "SNMP Error", f"Failed to set IFM entry {ifm_index}: {e}")
 
-        def add_ifm_entry() -> None:
-            """Add a new configurable IFM entry form with configurable index."""
-            # Configurable index input (defaults to next available index or 1)
-            default_index = (ifm_entries[-1]['index'] + 1) if ifm_entries else 1
-            index_var = tk.IntVar(value=default_index)
-
-            # Create a frame for this entry
-            entry_frame = ttk.LabelFrame(config_frame, text=f"IFM Entry {index_var.get()}", padding=8)
-            row_pos = len(ifm_entries)
-            entry_frame.grid(row=row_pos, column=0, sticky='ew', padx=4, pady=4)
-            entry_frame.columnconfigure(1, weight=1)
-            entry_frame.columnconfigure(3, weight=1)
-
-            # Create variables for this entry
-            idx_val = index_var.get()
-            entry_vars = {
-                'index_var': index_var,
-                'psid': tk.StringVar(value='8002' if idx_val == 1 else 
-                                          '8003' if idx_val == 2 else 
-                                          '8010' if idx_val == 3 else 
-                                          '0027' if idx_val == 4 else 'E0000017'),
-                'channel': tk.IntVar(value=180 if self.mode_mib_var.get() == "rsu41" else 183),
-                'enable': tk.IntVar(value=1),
-                'priority': tk.IntVar(value=5),
-                'options': tk.StringVar(value='00'),
-                'payload': tk.StringVar(value=''),
-                'dsrc_msg_id': tk.IntVar(value=31),
-                'tx_mode': tk.IntVar(value=0),
-                'frame': entry_frame,
-                'index': idx_val,
-                'ntcip_widgets': [],
-                'rsu41_widgets': [],
-            }
-
-            # Row 0: Index and PSID (common)
-            ttk.Label(entry_frame, text="IFM Index:").grid(row=0, column=0, sticky='e', padx=4, pady=2)
-            def on_index_change(*_args):
-                # Gracefully handle empty/non-integer input while typing
-                try:
-                    new_idx = int(index_var.get())
-                except Exception:
-                    # Keep previous index, do not crash while the field is temporarily empty
-                    new_idx = entry_vars.get('index', default_index)
-                # Clamp to valid range (1..32 typical, but allow >=1)
-                if new_idx < 1:
-                    new_idx = 1
-                    index_var.set(new_idx)
-                entry_vars['index'] = new_idx
-                entry_frame.configure(text=f"IFM Entry {entry_vars['index']}")
-            index_var.trace_add('write', on_index_change)
-            ttk.Entry(entry_frame, textvariable=index_var, width=8).grid(row=0, column=1, sticky='w', padx=4, pady=2)
-
-            ttk.Label(entry_frame, text="PSID (hex):").grid(row=0, column=2, sticky='e', padx=4, pady=2)
-            ttk.Entry(entry_frame, textvariable=entry_vars['psid'], width=15).grid(row=0, column=3, sticky='ew', padx=4, pady=2)
-
-            # Row 1: Channel and Enable (common)
-            ttk.Label(entry_frame, text="Channel:").grid(row=1, column=0, sticky='e', padx=4, pady=2)
-            ttk.Entry(entry_frame, textvariable=entry_vars['channel'], width=10, state="readonly").grid(row=1, column=1, sticky='w', padx=4, pady=2)
-            ttk.Label(entry_frame, text="Enable (0/1):").grid(row=1, column=2, sticky='e', padx=4, pady=2)
-            ttk.Entry(entry_frame, textvariable=entry_vars['enable'], width=10, state="readonly").grid(row=1, column=3, sticky='ew', padx=4, pady=2)
-
-            # Row 2: DSRC Msg ID and TX Mode (RSU 4.1 only — greyed out for NTCIP 1218)
-            ttk.Label(entry_frame, text="DSRC Msg ID:").grid(row=2, column=0, sticky='e', padx=4, pady=2)
-            ent_dsrc = ttk.Entry(entry_frame, textvariable=entry_vars['dsrc_msg_id'], width=10)
-            ent_dsrc.grid(row=2, column=1, sticky='w', padx=4, pady=2)
-            ttk.Label(entry_frame, text="TX Mode:").grid(row=2, column=2, sticky='e', padx=4, pady=2)
-            ent_txmode = ttk.Entry(entry_frame, textvariable=entry_vars['tx_mode'], width=10)
-            ent_txmode.grid(row=2, column=3, sticky='ew', padx=4, pady=2)
-            entry_vars['rsu41_widgets'] = [ent_dsrc, ent_txmode]
-
-            # Row 3: Priority and Options (NTCIP 1218 only — greyed out for RSU 4.1)
-            ttk.Label(entry_frame, text="Priority:").grid(row=3, column=0, sticky='e', padx=4, pady=2)
-            ent_priority = ttk.Entry(entry_frame, textvariable=entry_vars['priority'], width=10)
-            ent_priority.grid(row=3, column=1, sticky='w', padx=4, pady=2)
-            ttk.Label(entry_frame, text="Options (hex):").grid(row=3, column=2, sticky='e', padx=4, pady=2)
-            ent_options = ttk.Entry(entry_frame, textvariable=entry_vars['options'], width=15)
-            ent_options.grid(row=3, column=3, sticky='ew', padx=4, pady=2)
-
-            # Row 4: Payload (NTCIP 1218 only — greyed out for RSU 4.1)
-            ttk.Label(entry_frame, text="Payload (hex):").grid(row=4, column=0, sticky='e', padx=4, pady=2)
-            ent_payload = ttk.Entry(entry_frame, textvariable=entry_vars['payload'], width=20)
-            ent_payload.grid(row=4, column=1, columnspan=3, sticky='ew', padx=4, pady=2)
-            entry_vars['ntcip_widgets'] = [ent_priority, ent_options, ent_payload]
-
-            # Row 5: Button frame for Set and Remove buttons
-            button_frame = ttk.Frame(entry_frame)
-            button_frame.grid(row=5, column=0, columnspan=4, pady=4)
-            set_btn = ttk.Button(button_frame, text="Set Entry", command=lambda: set_single_ifm_entry(entry_vars, entry_vars['index']))
-            set_btn.pack(side='left', padx=4)
-            remove_btn = ttk.Button(button_frame, text="Remove Entry", command=lambda: remove_ifm_entry(entry_vars))
-            remove_btn.pack(side='left', padx=4)
-
-            ifm_entries.append(entry_vars)
-
-            # Apply current MIB field states to the new entry
-            update_field_states()
+            self._run_async(work, on_ok, on_err)
 
         def remove_ifm_entry(entry_vars: dict) -> None:
-            """Remove an IFM entry form."""
-            entry_vars['frame'].destroy()
+            frame = entry_vars['frame']
+            config_inner_layout.removeWidget(frame)
+            frame.setParent(None)
+            frame.deleteLater()
             ifm_entries.remove(entry_vars)
-            # Update titles to reflect each entry's configured index
             for entry in ifm_entries:
-                entry['frame'].configure(text=f"IFM Entry {entry['index']}")
+                entry['frame'].setTitle(f"IFM Entry {entry['index_spin'].value()}")
 
-        def destroy_ifm_entry(idx: int, entry_widget: ttk.Entry, button_widget: ttk.Button) -> None:
-            """Destroy IFM entry for the given index and update given UI row."""
-            if self.mode_mib_var.get() == "ntcip1218":
-                delete_ifm_oid = f"1.3.6.1.4.1.1206.4.2.18.4.2.1.5.{idx}"
+        def add_ifm_entry() -> None:
+            default_index = (ifm_entries[-1]['index_spin'].value() + 1) if ifm_entries else 1
+            default_psid = (
+                '8002' if default_index == 1 else
+                '8003' if default_index == 2 else
+                '8010' if default_index == 3 else
+                '0027' if default_index == 4 else 'E0000017'
+            )
+            default_channel = 180 if self.mode_mib == "rsu41" else 183
+
+            frame = QGroupBox(f"IFM Entry {default_index}")
+            grid = QGridLayout(frame)
+            grid.setHorizontalSpacing(6)
+            grid.setVerticalSpacing(4)
+
+            # Row 0: Index and PSID
+            grid.addWidget(QLabel("IFM Index:"), 0, 0, ALIGN_RIGHT)
+            index_spin = _make_spinbox(default_index, 1, 32)
+            grid.addWidget(index_spin, 0, 1)
+            grid.addWidget(QLabel("PSID (hex):"), 0, 2, ALIGN_RIGHT)
+            psid_edit = _make_hex_edit(default_psid)
+            grid.addWidget(psid_edit, 0, 3)
+
+            # Row 1: Channel and Enable (readonly)
+            grid.addWidget(QLabel("Channel:"), 1, 0, ALIGN_RIGHT)
+            channel_spin = _make_spinbox(default_channel, 1, 255, readonly=True)
+            grid.addWidget(channel_spin, 1, 1)
+            grid.addWidget(QLabel("Enable:"), 1, 2, ALIGN_RIGHT)
+            enable_spin = _make_spinbox(1, 0, 1, readonly=True)
+            grid.addWidget(enable_spin, 1, 3)
+
+            # Row 2: DSRC Msg ID and TX Mode (RSU 4.1 only)
+            grid.addWidget(QLabel("DSRC Msg ID:"), 2, 0, ALIGN_RIGHT)
+            dsrc_spin = _make_spinbox(31, 0, 255)
+            grid.addWidget(dsrc_spin, 2, 1)
+            grid.addWidget(QLabel("TX Mode:"), 2, 2, ALIGN_RIGHT)
+            txmode_spin = _make_spinbox(0, 0, 1)
+            grid.addWidget(txmode_spin, 2, 3)
+
+            # Row 3: Priority and Options (NTCIP 1218 only)
+            grid.addWidget(QLabel("Priority:"), 3, 0, ALIGN_RIGHT)
+            priority_spin = _make_spinbox(5, 0, 63)
+            grid.addWidget(priority_spin, 3, 1)
+            grid.addWidget(QLabel("Options (hex):"), 3, 2, ALIGN_RIGHT)
+            options_edit = _make_hex_edit("00")
+            grid.addWidget(options_edit, 3, 3)
+
+            # Row 4: Payload (NTCIP 1218 only)
+            grid.addWidget(QLabel("Payload (hex):"), 4, 0, ALIGN_RIGHT)
+            payload_edit = _make_hex_edit("")
+            grid.addWidget(payload_edit, 4, 1, 1, 3)
+
+            # Row 5: Set/Remove buttons
+            btn_row = QHBoxLayout()
+            btn_row.addStretch(1)
+            set_btn = QPushButton("Set Entry")
+            remove_btn = QPushButton("Remove Entry")
+            btn_row.addWidget(set_btn)
+            btn_row.addWidget(remove_btn)
+            btn_row.addStretch(1)
+            grid.addLayout(btn_row, 5, 0, 1, 4)
+
+            grid.setColumnStretch(1, 1)
+            grid.setColumnStretch(3, 1)
+
+            entry_vars = {
+                'frame': frame,
+                'index_spin': index_spin,
+                'psid_edit': psid_edit,
+                'channel_spin': channel_spin,
+                'enable_spin': enable_spin,
+                'dsrc_msg_id_spin': dsrc_spin,
+                'tx_mode_spin': txmode_spin,
+                'priority_spin': priority_spin,
+                'options_edit': options_edit,
+                'payload_edit': payload_edit,
+                'ntcip_widgets': [priority_spin, options_edit, payload_edit],
+                'rsu41_widgets': [dsrc_spin, txmode_spin],
+            }
+
+            index_spin.valueChanged.connect(
+                lambda v: frame.setTitle(f"IFM Entry {v}")
+            )
+            set_btn.clicked.connect(lambda: set_single_ifm_entry(entry_vars))
+            remove_btn.clicked.connect(lambda: remove_ifm_entry(entry_vars))
+
+            config_inner_layout.insertWidget(config_inner_layout.count() - 1, frame)
+            ifm_entries.append(entry_vars)
+            update_field_states()
+
+        def destroy_ifm_entry(idx: int) -> None:
+            if self.mode_mib == "ntcip1218":
+                delete_oid = f"1.3.6.1.4.1.1206.4.2.18.4.2.1.5.{idx}"
             else:
-                delete_ifm_oid = f"1.0.15628.4.1.5.1.7.{idx}"
-            self._destroy_entry(delete_ifm_oid, entry_widget, button_widget)
-            # Refresh entries by running get operation
-            get_ifm_info()
+                delete_oid = f"1.0.15628.4.1.5.1.7.{idx}"
+            self._destroy_entry(delete_oid, on_done=get_ifm_info)
 
         def get_ifm_info() -> None:
-            """Fetch IFM info and render each result as a read-only row with a Destroy button."""
-            # Clear previous rows
-            for child in rows_frame.winfo_children():
-                child.destroy()
-            # Enable the "Add IFM Entry" button after first Get
-            add_ifm_btn.configure(state='normal')
+            add_ifm_btn.setEnabled(True)
+            base_oid = (
+                "1.3.6.1.4.1.1206.4.2.18.4.2.1"
+                if self.mode_mib == "ntcip1218" else "1.0.15628.4.1.5.1"
+            )
 
-            if self.mode_mib_var.get() == "ntcip1218":
-                base_oid = "1.3.6.1.4.1.1206.4.2.18.4.2.1"
-            else:
-                base_oid = "1.0.15628.4.1.5.1"
-
-            session = self._get_session()
-            current_row = 0
-            for i in range(1, 7):
-                get_oid = f"{base_oid}.2.{i}"
-                try:
-                    handle = session.get(get_oid)
-                    varbind_list = handle.wait() if hasattr(handle, 'wait') else handle  # type: ignore
-                    formatted_value = cr_helper.format_snmp_value(varbind_list[0])  # type: ignore
-                    text = f"IFM Index {i}: {formatted_value}"
-                    var = tk.StringVar(value=text)
-                    entry = ttk.Entry(rows_frame, textvariable=var, state='readonly')
-                    entry._var = var  # type: ignore  # Keep StringVar alive
-                    entry.grid(row=current_row, column=0, sticky='ew', padx=4, pady=2)
-                    btn = ttk.Button(rows_frame, text="Destroy")
-                    btn.grid(row=current_row, column=1, sticky='w', padx=4, pady=2)
-                    btn.configure(command=lambda idx=i, e=entry, b=btn: destroy_ifm_entry(idx, e, b))
-                    current_row += 1
-                except (Timeout, ErrorResponse) as e:
-                    # Show an error row for this index
-                    err_text = f"IFM Index {i}: error retrieving info"
-                    var = tk.StringVar(value=err_text)
-                    entry = ttk.Entry(rows_frame, textvariable=var, state='readonly')
-                    entry._var = var  # type: ignore  # Keep StringVar alive
-                    entry.grid(row=current_row, column=0, sticky='ew', padx=4, pady=2)
-                    btn = ttk.Button(rows_frame, text="Destroy", state='disabled')
-                    btn.grid(row=current_row, column=1, sticky='w', padx=4, pady=2)
-                    current_row += 1
-                    messagebox.showerror("SNMP Error", str(e))
-
-        # Update IFM field states when MIB selection changes in credentials tab
-        self.mode_mib_var.trace_add('write', lambda *_: update_field_states())
-
-        # Create buttons with "Add IFM Entry" initially disabled
-        add_ifm_btn = ttk.Button(controls, text="Add IFM Entry", command=add_ifm_entry, state='disabled')
-        add_ifm_btn.pack(side='left', padx=6)
-        ttk.Button(controls, text="Get IFM Info", command=get_ifm_info).pack(side='left', padx=6)
-        ttk.Button(controls, text="Help", command=lambda: self._show_help("Immediate Forward", cr_helper.get_ifm_help_content())).pack(side='left', padx=6)
-
-    def create_received_message_forward_tab(self, notebook):
-        """Create the Received Message Forward tab"""
-        rmf_tab = ttk.Frame(notebook, padding=12)
-        notebook.add(rmf_tab, text="Received Message Forward")
-
-        # Layout config
-        rmf_tab.columnconfigure(0, weight=1)
-        rmf_tab.rowconfigure(2, weight=1)
-
-        # Controls row
-        controls = ttk.Frame(rmf_tab)
-        controls.grid(row=0, column=0, sticky='ew', padx=6, pady=6)
-
-        # Configuration section
-        config_frame = ttk.LabelFrame(rmf_tab, text="Configure RFM Entries", padding=8)
-        config_frame.grid(row=1, column=0, sticky='ew', padx=6, pady=6)
-        config_frame.columnconfigure(0, weight=1)
-
-        # Container for RFM rows (display results)
-        rows_frame = ttk.Frame(rmf_tab)
-        rows_frame.grid(row=2, column=0, sticky='nsew', padx=6, pady=6)
-        rows_frame.columnconfigure(0, weight=1)
-
-        # Storage for RFM entry configurations
-        rfm_entries = []
-
-        def set_single_rfm_entry(entry_vars: dict, rfm_index: int) -> None:
-            """Configure a single RFM entry."""
-            try:
-                # Get values from the form
-                psid = entry_vars['psid'].get().strip()
-                dest_ip = entry_vars['dest_ip'].get().strip()
-                dest_port = entry_vars['dest_port'].get()
-                protocol = entry_vars['protocol'].get()
-                rssi = entry_vars['rssi'].get()
-                interval = entry_vars['interval'].get()
-                start_date = entry_vars['start_date'].get().strip()
-                stop_date = entry_vars['stop_date'].get().strip()
-                secure = entry_vars['secure'].get()
-                auth_interval = entry_vars['auth_interval'].get()
-
-                # Validate inputs
-                if not psid:
-                    messagebox.showerror("Validation Error", f"Entry {rfm_index}: PSID cannot be empty")
-                    return
-                if not dest_ip:
-                    messagebox.showerror("Validation Error", f"Entry {rfm_index}: Destination IP cannot be empty")
-                    return
-
-                # Convert date strings to SNMP DateAndTime format
-                try:
-                    start_date_bytes = cr_helper.convert_datetime_to_snmp(start_date)
-                    stop_date_bytes = cr_helper.convert_datetime_to_snmp(stop_date)
-                except ValueError as e:
-                    messagebox.showerror("Validation Error", f"Entry {rfm_index}: {e}")
-                    return
-
-                # RSU must be in standby mode to accept configuration changes
-                self._set_standby()
-
-                # Configure the entry using SET operations
-                print(f"Configuring RFM entry {rfm_index}")
+            def work():
                 session = self._get_session()
-                base_oid = f"1.3.6.1.4.1.1206.4.2.18.5.2.1"
-                session.set(
-                    (f"{base_oid}.2.{rfm_index}", OctetString(unhexlify(psid))),        # rsuReceivedMsgPsid (hex)
-                    (f"{base_oid}.3.{rfm_index}", OctetString(dest_ip.encode())),       # rsuReceivedMsgDestIpAddr (string)
-                    (f"{base_oid}.4.{rfm_index}", Integer32(int(dest_port))),           # rsuReceivedMsgDestPort (integer)
-                    (f"{base_oid}.5.{rfm_index}", Integer32(int(protocol))),            # rsuReceivedMsgProtocol (integer)
-                    (f"{base_oid}.6.{rfm_index}", Integer32(int(rssi))),                # rsuReceivedMsgRssi (integer)
-                    (f"{base_oid}.7.{rfm_index}", Integer32(int(interval))),            # rsuReceivedMsgInterval (integer)
-                    (f"{base_oid}.8.{rfm_index}", OctetString(start_date_bytes)),       # rsuReceivedMsgDeliveryStart (DateAndTime)
-                    (f"{base_oid}.9.{rfm_index}", OctetString(stop_date_bytes)),        # rsuReceivedMsgDeliveryStop (DateAndTime)
-                    (f"{base_oid}.10.{rfm_index}", Integer32(4)),                       # rsuReceivedMsgStatus (4=createAndGo)
-                    (f"{base_oid}.11.{rfm_index}", Integer32(int(secure))),             # rsuReceivedMsgSecure (integer)
-                    (f"{base_oid}.12.{rfm_index}", Integer32(int(auth_interval)))       # rsuReceivedMsgAuthMsgInterval (integer)
-                )
+                results = []
+                for i in range(1, 7):
+                    try:
+                        handle = session.get(f"{base_oid}.2.{i}")
+                        varbind_list = handle.wait() if hasattr(handle, 'wait') else handle
+                        value = cr_helper.format_snmp_value(varbind_list[0])
+                        results.append((i, value, None))
+                    except (Timeout, ErrorResponse) as e:
+                        results.append((i, None, str(e)))
+                return results
 
-                # Return RSU to operate mode
+            def on_ok(results):
+                ifm_table.setRowCount(0)
+                for i, value, err in results:
+                    row = ifm_table.rowCount()
+                    ifm_table.insertRow(row)
+                    ifm_table.setItem(row, 0, QTableWidgetItem(str(i)))
+                    if err is None:
+                        ifm_table.setItem(row, 1, QTableWidgetItem(value))
+                        btn = QPushButton("Destroy")
+                        btn.clicked.connect(lambda _c=False, ii=i: destroy_ifm_entry(ii))
+                        ifm_table.setCellWidget(row, 2, btn)
+                    else:
+                        self._fill_error_row(ifm_table, row, err, data_cols=1)
+
+            def on_err(e):
+                QMessageBox.critical(self, "SNMP Error", str(e))
+
+            self._run_async(work, on_ok, on_err)
+
+        self._register_mode_mib_callback(update_field_states)
+
+        add_ifm_btn = QPushButton("Add IFM Entry")
+        add_ifm_btn.setEnabled(False)
+        add_ifm_btn.clicked.connect(add_ifm_entry)
+        controls.addWidget(add_ifm_btn)
+        get_btn = QPushButton("Get IFM Info")
+        get_btn.clicked.connect(get_ifm_info)
+        controls.addWidget(get_btn)
+        help_btn = QPushButton("Help")
+        help_btn.clicked.connect(lambda: self._show_help("Immediate Forward", cr_helper.get_ifm_help_content()))
+        controls.addWidget(help_btn)
+        controls.addStretch(1)
+
+        self.tabs.addTab(tab, "Immediate Forward")
+
+    # ---------- Received Message Forward tab ----------
+    def _create_received_message_forward_tab(self) -> None:
+        tab = QWidget()
+        outer = QVBoxLayout(tab)
+        outer.setContentsMargins(12, 12, 12, 12)
+
+        controls = QHBoxLayout()
+        outer.addLayout(controls)
+
+        config_group = QGroupBox("Configure RFM Entries")
+        config_vbox = QVBoxLayout(config_group)
+        config_scroll = QScrollArea()
+        config_scroll.setWidgetResizable(True)
+        config_inner = QWidget()
+        config_inner_layout = QVBoxLayout(config_inner)
+        config_inner_layout.addStretch(1)
+        config_scroll.setWidget(config_inner)
+        config_vbox.addWidget(config_scroll)
+        outer.addWidget(config_group)
+
+        results_group = QGroupBox("RFM Results")
+        results_layout = QVBoxLayout(results_group)
+        rfm_table = self._make_results_table(["Index", "PSID", "Dest IP", "Dest Port", ""])
+        results_layout.addWidget(rfm_table)
+        outer.addWidget(results_group, 1)
+
+        rfm_entries: List[dict] = []
+
+        def set_single_rfm_entry(entry_vars: dict) -> None:
+            rfm_index = entry_vars['index_spin'].value()
+            psid = entry_vars['psid_edit'].text().strip()
+            dest_ip = entry_vars['dest_ip_edit'].text().strip()
+            dest_port = entry_vars['dest_port_spin'].value()
+            protocol = int(entry_vars['protocol_combo'].currentText())
+            rssi = entry_vars['rssi_spin'].value()
+            interval = entry_vars['interval_spin'].value()
+            start_date = entry_vars['start_date_edit'].text().strip()
+            stop_date = entry_vars['stop_date_edit'].text().strip()
+            secure = entry_vars['secure_spin'].value()
+            auth_interval = entry_vars['auth_interval_spin'].value()
+
+            if not psid:
+                QMessageBox.critical(self, "Validation Error", f"Entry {rfm_index}: PSID cannot be empty")
+                return
+            if not dest_ip:
+                QMessageBox.critical(self, "Validation Error", f"Entry {rfm_index}: Destination IP cannot be empty")
+                return
+
+            try:
+                start_date_bytes = cr_helper.convert_datetime_to_snmp(start_date)
+                stop_date_bytes = cr_helper.convert_datetime_to_snmp(stop_date)
+            except ValueError as e:
+                QMessageBox.critical(self, "Validation Error", f"Entry {rfm_index}: {e}")
+                return
+
+            def work():
+                self._set_standby()
+                session = self._get_session()
+                base_oid = "1.3.6.1.4.1.1206.4.2.18.5.2.1"
+                session.set(
+                    (f"{base_oid}.2.{rfm_index}", OctetString(unhexlify(psid))),
+                    (f"{base_oid}.3.{rfm_index}", OctetString(dest_ip.encode())),
+                    (f"{base_oid}.4.{rfm_index}", Integer32(dest_port)),
+                    (f"{base_oid}.5.{rfm_index}", Integer32(protocol)),
+                    (f"{base_oid}.6.{rfm_index}", Integer32(rssi)),
+                    (f"{base_oid}.7.{rfm_index}", Integer32(interval)),
+                    (f"{base_oid}.8.{rfm_index}", OctetString(start_date_bytes)),
+                    (f"{base_oid}.9.{rfm_index}", OctetString(stop_date_bytes)),
+                    (f"{base_oid}.10.{rfm_index}", Integer32(4)),
+                    (f"{base_oid}.11.{rfm_index}", Integer32(secure)),
+                    (f"{base_oid}.12.{rfm_index}", Integer32(auth_interval)),
+                )
                 self._set_operate()
 
-                messagebox.showinfo("Success", f"Successfully configured RFM entry {rfm_index} with PSID {psid}")
-                # Refresh the display
+            def on_ok(_):
+                QMessageBox.information(self, "Success", f"Successfully configured RFM entry {rfm_index} with PSID {psid}")
                 get_rfm_info()
 
-            except Exception as e:
-                messagebox.showerror("SNMP Error", f"Failed to set RFM entry {rfm_index}: {e}")
+            def on_err(e):
+                QMessageBox.critical(self, "SNMP Error", f"Failed to set RFM entry {rfm_index}: {e}")
 
-        def add_rfm_entry() -> None:
-            """Add a new configurable RFM entry form with configurable index."""
-            # Configurable index input (defaults to next available index or 1)
-            default_index = (rfm_entries[-1]['index'] + 1) if rfm_entries else 1
-            index_var = tk.IntVar(value=default_index)
-
-            # Create a frame for this entry
-            entry_frame = ttk.LabelFrame(config_frame, text=f"RFM Entry {index_var.get()}", padding=8)
-            row_pos = len(rfm_entries)
-            entry_frame.grid(row=row_pos, column=0, sticky='ew', padx=4, pady=4)
-            entry_frame.columnconfigure(1, weight=1)
-            entry_frame.columnconfigure(3, weight=1)
-
-            # Create variables for this entry
-            idx_val = index_var.get()
-            entry_vars = {
-                'index_var': index_var,
-                'psid': tk.StringVar(value='8002' if idx_val == 1 else '8003'),
-                'dest_ip': tk.StringVar(value='192.168.55.152'),
-                'dest_port': tk.IntVar(value=5398),
-                'protocol': tk.IntVar(value=2),  # 2=UDP
-                'rssi': tk.IntVar(value=-100),
-                'interval': tk.IntVar(value=1),
-                'start_date': tk.StringVar(value='2025-01-01,00:00:00.0'),
-                'stop_date': tk.StringVar(value='2030-01-01,00:00:00.0'),
-                'secure': tk.IntVar(value=0),
-                'auth_interval': tk.IntVar(value=0),
-                'frame': entry_frame,
-                'index': idx_val
-            }
-
-            # Row 0: Index and PSID
-            ttk.Label(entry_frame, text="RFM Index:").grid(row=0, column=0, sticky='e', padx=4, pady=2)
-            def on_index_change(*_args):
-                # Gracefully handle empty/non-integer input while typing
-                try:
-                    new_idx = int(index_var.get())
-                except Exception:
-                    # Keep previous index, do not crash while the field is temporarily empty
-                    new_idx = entry_vars.get('index', default_index)
-                # Clamp to valid range (1..32 typical, but allow >=1)
-                if new_idx < 1:
-                    new_idx = 1
-                    index_var.set(new_idx)
-                entry_vars['index'] = new_idx
-                entry_frame.configure(text=f"RFM Entry {entry_vars['index']}")
-            index_var.trace_add('write', on_index_change)
-            ttk.Entry(entry_frame, textvariable=index_var, width=8).grid(row=0, column=1, sticky='w', padx=4, pady=2)
-
-            ttk.Label(entry_frame, text="PSID (hex):").grid(row=0, column=2, sticky='e', padx=4, pady=2)
-            ttk.Entry(entry_frame, textvariable=entry_vars['psid'], width=15).grid(row=0, column=3, sticky='ew', padx=4, pady=2)
-
-            # Row 1: Destination IP and Port
-            ttk.Label(entry_frame, text="Dest IP:").grid(row=1, column=0, sticky='e', padx=4, pady=2)
-            ttk.Entry(entry_frame, textvariable=entry_vars['dest_ip'], width=15).grid(row=1, column=1, sticky='ew', padx=4, pady=2)
-            ttk.Label(entry_frame, text="Dest Port:").grid(row=1, column=2, sticky='e', padx=4, pady=2)
-            ttk.Entry(entry_frame, textvariable=entry_vars['dest_port'], width=10).grid(row=1, column=3, sticky='ew', padx=4, pady=2)
-
-            # Row 2: Protocol and RSSI
-            ttk.Label(entry_frame, text="Protocol:").grid(row=2, column=0, sticky='e', padx=4, pady=2)
-            ttk.Combobox(entry_frame, textvariable=entry_vars['protocol'], values=['2'], width=8, state="readonly").grid(row=2, column=1, sticky='w', padx=4, pady=2)
-            ttk.Label(entry_frame, text="RSSI:").grid(row=2, column=2, sticky='e', padx=4, pady=2)
-            ttk.Entry(entry_frame, textvariable=entry_vars['rssi'], width=10, state="readonly").grid(row=2, column=3, sticky='ew', padx=4, pady=2)
-
-            # Row 3: Interval and Secure
-            ttk.Label(entry_frame, text="Interval:").grid(row=3, column=0, sticky='e', padx=4, pady=2)
-            ttk.Entry(entry_frame, textvariable=entry_vars['interval'], width=10).grid(row=3, column=1, sticky='w', padx=4, pady=2)
-            ttk.Label(entry_frame, text="Secure (0/1):").grid(row=3, column=2, sticky='e', padx=4, pady=2)
-            ttk.Entry(entry_frame, textvariable=entry_vars['secure'], width=10).grid(row=3, column=3, sticky='ew', padx=4, pady=2)
-
-            # Row 4: Start Date
-            ttk.Label(entry_frame, text="Start Date:").grid(row=4, column=0, sticky='e', padx=4, pady=2)
-            ttk.Entry(entry_frame, textvariable=entry_vars['start_date'], width=20).grid(row=4, column=1, columnspan=3, sticky='ew', padx=4, pady=2)
-
-            # Row 5: Stop Date
-            ttk.Label(entry_frame, text="Stop Date:").grid(row=5, column=0, sticky='e', padx=4, pady=2)
-            ttk.Entry(entry_frame, textvariable=entry_vars['stop_date'], width=20).grid(row=5, column=1, columnspan=3, sticky='ew', padx=4, pady=2)
-
-            # Row 6: Auth Interval
-            ttk.Label(entry_frame, text="Auth Msg Interval:").grid(row=6, column=0, sticky='e', padx=4, pady=2)
-            ttk.Entry(entry_frame, textvariable=entry_vars['auth_interval'], width=10).grid(row=6, column=1, sticky='w', padx=4, pady=2)
-
-            # Row 7: Button frame for Set and Remove buttons
-            button_frame = ttk.Frame(entry_frame)
-            button_frame.grid(row=7, column=0, columnspan=4, pady=4)
-            set_btn = ttk.Button(button_frame, text="Set Entry", command=lambda: set_single_rfm_entry(entry_vars, entry_vars['index']))
-            set_btn.pack(side='left', padx=4)
-            remove_btn = ttk.Button(button_frame, text="Remove Entry", command=lambda: remove_rfm_entry(entry_vars))
-            remove_btn.pack(side='left', padx=4)
-
-            rfm_entries.append(entry_vars)
+            self._run_async(work, on_ok, on_err)
 
         def remove_rfm_entry(entry_vars: dict) -> None:
-            """Remove an RFM entry form."""
-            entry_vars['frame'].destroy()
+            frame = entry_vars['frame']
+            config_inner_layout.removeWidget(frame)
+            frame.setParent(None)
+            frame.deleteLater()
             rfm_entries.remove(entry_vars)
-            # Update titles to reflect each entry's configured index
             for entry in rfm_entries:
-                entry['frame'].configure(text=f"RFM Entry {entry['index']}")
+                entry['frame'].setTitle(f"RFM Entry {entry['index_spin'].value()}")
 
-        def destroy_rfm_entry(idx: int, entry_widget: ttk.Entry, button_widget: ttk.Button) -> None:
-            """Destroy RFM entry for the given index and update given UI row."""
-            delete_rfm_oid = f"1.3.6.1.4.1.1206.4.2.18.5.2.1.10.{idx}"
-            self._destroy_entry(delete_rfm_oid, entry_widget, button_widget)
-            # Refresh entries by running get operation
-            get_rfm_info()
+        def add_rfm_entry() -> None:
+            default_index = (rfm_entries[-1]['index_spin'].value() + 1) if rfm_entries else 1
+            default_psid = '8002' if default_index == 1 else '8003'
 
-        def get_rfm_info() -> None:
-            """Fetch RFM info and render each result as a read-only row with a Destroy button."""
-            # Clear previous rows
-            for child in rows_frame.winfo_children():
-                child.destroy()
-            # Enable the "Add RFM Entry" button after first Get
-            add_rfm_btn.configure(state='normal')
+            frame = QGroupBox(f"RFM Entry {default_index}")
+            grid = QGridLayout(frame)
+            grid.setHorizontalSpacing(6)
+            grid.setVerticalSpacing(4)
 
-            session = self._get_session()
-            current_row = 0
-            for i in range(1, 7):
-                for j in range(2, 5):
-                    get_oid = f"1.3.6.1.4.1.1206.4.2.18.5.2.1.{j}.{i}"
-                    try:
-                        handle = session.get(get_oid)
-                        varbind_list = handle.wait() if hasattr(handle, 'wait') else handle  # type: ignore
-                        formatted_value = cr_helper.format_snmp_value(varbind_list[0])  # type: ignore
-                        text = f"RFM Index {i}: {formatted_value}"
-                        var = tk.StringVar(value=text)
-                        entry = ttk.Entry(rows_frame, textvariable=var, state='readonly')
-                        entry._var = var  # type: ignore  # Keep StringVar alive
-                        entry.grid(row=current_row, column=0, sticky='ew', padx=4, pady=2)
-                        btn = ttk.Button(rows_frame, text="Destroy")
-                        btn.grid(row=current_row, column=1, sticky='w', padx=4, pady=2)
-                        btn.configure(command=lambda idx=i, e=entry, b=btn: destroy_rfm_entry(idx, e, b))
-                        current_row += 1
-                    except (Timeout, ErrorResponse) as e:
-                        # Show an error row for this index
-                        err_text = f"RFM Index {i}: error retrieving info"
-                        var = tk.StringVar(value=err_text)
-                        entry = ttk.Entry(rows_frame, textvariable=var, state='readonly')
-                        entry._var = var  # type: ignore  # Keep StringVar alive
-                        entry.grid(row=current_row, column=0, sticky='ew', padx=4, pady=2)
-                        btn = ttk.Button(rows_frame, text="Destroy", state='disabled')
-                        btn.grid(row=current_row, column=1, sticky='w', padx=4, pady=2)
-                        current_row += 1
-                        messagebox.showerror("SNMP Error", str(e))
+            grid.addWidget(QLabel("RFM Index:"), 0, 0, ALIGN_RIGHT)
+            index_spin = _make_spinbox(default_index, 1, 32)
+            grid.addWidget(index_spin, 0, 1)
+            grid.addWidget(QLabel("PSID (hex):"), 0, 2, ALIGN_RIGHT)
+            psid_edit = _make_hex_edit(default_psid)
+            grid.addWidget(psid_edit, 0, 3)
 
-        # Create buttons with "Add RFM Entry" initially disabled
-        add_rfm_btn = ttk.Button(controls, text="Add RFM Entry", command=add_rfm_entry, state='disabled')
-        add_rfm_btn.pack(side='left', padx=6)
-        ttk.Button(controls, text="Get RFM Info", command=get_rfm_info).pack(side='left', padx=6)
-        ttk.Button(controls, text="Help", command=lambda: self._show_help("Received Message Forward", cr_helper.get_rfm_help_content())).pack(side='left', padx=6)
+            grid.addWidget(QLabel("Dest IP:"), 1, 0, ALIGN_RIGHT)
+            dest_ip_edit = QLineEdit("192.168.55.152")
+            grid.addWidget(dest_ip_edit, 1, 1)
+            grid.addWidget(QLabel("Dest Port:"), 1, 2, ALIGN_RIGHT)
+            dest_port_spin = _make_spinbox(5398, 1, 65535)
+            grid.addWidget(dest_port_spin, 1, 3)
 
-    def create_store_and_repeat_tab(self, notebook):
-        """Create the Store-and-Repeat tab"""
-        srm_tab = ttk.Frame(notebook, padding=12)
-        notebook.add(srm_tab, text="Store-and-Repeat")
+            grid.addWidget(QLabel("Protocol:"), 2, 0, ALIGN_RIGHT)
+            protocol_combo = QComboBox()
+            protocol_combo.addItems(["2"])
+            protocol_combo.setCurrentText("2")
+            grid.addWidget(protocol_combo, 2, 1)
+            grid.addWidget(QLabel("RSSI (dBm):"), 2, 2, ALIGN_RIGHT)
+            rssi_spin = _make_spinbox(-100, -200, 0, readonly=True)
+            grid.addWidget(rssi_spin, 2, 3)
 
-        # Layout config
-        srm_tab.columnconfigure(0, weight=1)
-        srm_tab.rowconfigure(1, weight=1)
+            grid.addWidget(QLabel("Interval:"), 3, 0, ALIGN_RIGHT)
+            interval_spin = _make_spinbox(1, 0, 1_000_000)
+            grid.addWidget(interval_spin, 3, 1)
+            grid.addWidget(QLabel("Secure:"), 3, 2, ALIGN_RIGHT)
+            secure_spin = _make_spinbox(0, 0, 1)
+            grid.addWidget(secure_spin, 3, 3)
 
-        # Controls row
-        controls = ttk.Frame(srm_tab)
-        controls.grid(row=0, column=0, sticky='ew', padx=6, pady=6)
+            grid.addWidget(QLabel("Start Date:"), 4, 0, ALIGN_RIGHT)
+            start_date_edit = QLineEdit("2025-01-01,00:00:00.0")
+            grid.addWidget(start_date_edit, 4, 1, 1, 3)
 
-        # Configuration section
-        config_frame = ttk.LabelFrame(srm_tab, text="Configure SRM Entries", padding=8)
-        config_frame.grid(row=1, column=0, sticky='ew', padx=6, pady=6)
-        config_frame.columnconfigure(0, weight=1)
+            grid.addWidget(QLabel("Stop Date:"), 5, 0, ALIGN_RIGHT)
+            stop_date_edit = QLineEdit("2030-01-01,00:00:00.0")
+            grid.addWidget(stop_date_edit, 5, 1, 1, 3)
 
-        # Container for SRM rows (display results)
-        rows_frame = ttk.Frame(srm_tab)
-        rows_frame.grid(row=2, column=0, sticky='nsew', padx=6, pady=6)
-        rows_frame.columnconfigure(0, weight=1)
+            grid.addWidget(QLabel("Auth Msg Interval:"), 6, 0, ALIGN_RIGHT)
+            auth_interval_spin = _make_spinbox(0, 0, 1_000_000)
+            grid.addWidget(auth_interval_spin, 6, 1)
 
-        # Storage for SRM entry configurations
-        srm_entries = []
+            btn_row = QHBoxLayout()
+            btn_row.addStretch(1)
+            set_btn = QPushButton("Set Entry")
+            remove_btn = QPushButton("Remove Entry")
+            btn_row.addWidget(set_btn)
+            btn_row.addWidget(remove_btn)
+            btn_row.addStretch(1)
+            grid.addLayout(btn_row, 7, 0, 1, 4)
 
-        def destroy_srm_entry(idx: int, entry_widget: ttk.Entry, button_widget: ttk.Button) -> None:
-            """Destroy SRM entry for the given index and update given UI row."""
-            delete_srm_oid = f"1.3.6.1.4.1.1206.4.2.18.3.2.1.9.{idx}"
-            self._destroy_entry(delete_srm_oid, entry_widget, button_widget)
-            # Refresh entries by running get operation
-            get_srm_info()
+            grid.setColumnStretch(1, 1)
+            grid.setColumnStretch(3, 1)
 
-        def get_srm_info() -> None:
-            """Fetch SRM info and render each result as a read-only row with a Destroy button."""
-            # Clear previous rows
-            for child in rows_frame.winfo_children():
-                child.destroy()
-            # Enable the "Add SRM Entry" button after first Get
-            add_srm_btn.configure(state='normal')
-
-            session = self._get_session()
-            current_row = 0
-            for i in range(1, 7):
-                for j in range(2, 8, 5): # get entries 2 and 7 (psid and payload)
-                    get_oid = f"1.3.6.1.4.1.1206.4.2.18.3.2.1.{j}.{i}"
-                    try:
-                        handle = session.get(get_oid)
-                        varbind_list = handle.wait() if hasattr(handle, 'wait') else handle  # type: ignore
-                        formatted_value = cr_helper.format_snmp_value(varbind_list[0])  # type: ignore
-                        text = f"SRM Index {i}: {formatted_value}"
-                        var = tk.StringVar(value=text)
-                        entry = ttk.Entry(rows_frame, textvariable=var, state='readonly')
-                        entry._var = var  # type: ignore  # Keep StringVar alive
-                        entry.grid(row=current_row, column=0, sticky='ew', padx=4, pady=2)
-                        btn = ttk.Button(rows_frame, text="Destroy")
-                        btn.grid(row=current_row, column=1, sticky='w', padx=4, pady=2)
-                        btn.configure(command=lambda idx=i, e=entry, b=btn: destroy_srm_entry(idx, e, b))
-                        current_row += 1
-                    except (Timeout, ErrorResponse) as e:
-                        # Show an error row for this index
-                        err_text = f"SRM Index {i}: error retrieving info"
-                        var = tk.StringVar(value=err_text)
-                        entry = ttk.Entry(rows_frame, textvariable=var, state='readonly')
-                        entry._var = var  # type: ignore  # Keep StringVar alive
-                        entry.grid(row=current_row, column=0, sticky='ew', padx=4, pady=2)
-                        btn = ttk.Button(rows_frame, text="Destroy", state='disabled')
-                        btn.grid(row=current_row, column=1, sticky='w', padx=4, pady=2)
-                        current_row += 1
-                        messagebox.showerror("SNMP Error", str(e))
-
-        def set_single_srm_entry(entry_vars: dict, srm_index: int) -> None:
-            """Configure a single SRM entry."""
-            try:
-                # Get values from the form
-                psid = entry_vars['psid'].get().strip()
-                channel = entry_vars['channel'].get()
-                interval = entry_vars['interval'].get()
-                start_date = entry_vars['start_date'].get().strip()
-                stop_date = entry_vars['stop_date'].get().strip()
-                payload = entry_vars['payload'].get().strip()
-                enable = entry_vars['enable'].get()
-                priority = entry_vars['priority'].get()
-                options = entry_vars['options'].get().strip()
-
-                # Validate inputs
-                if not psid:
-                    messagebox.showerror("Validation Error", f"Entry {srm_index}: PSID cannot be empty")
-                    return
-                if not payload:
-                    messagebox.showerror("Validation Error", f"Entry {srm_index}: Payload cannot be empty")
-                    return
-
-                # Convert date strings to SNMP DateAndTime format
-                try:
-                    start_date_bytes = cr_helper.convert_datetime_to_snmp(start_date)
-                    stop_date_bytes = cr_helper.convert_datetime_to_snmp(stop_date)
-                except ValueError as e:
-                    messagebox.showerror("Validation Error", f"Entry {srm_index}: {e}")
-                    return
-
-                # RSU must be in standby mode to accept configuration changes
-                self._set_standby()
-
-                # Configure the entry using SET operations
-                print(f"Configuring SRM entry {srm_index}")
-                session = self._get_session()
-                base_oid = f"1.3.6.1.4.1.1206.4.2.18.3.2.1"
-                session.set(
-                    (f"{base_oid}.2.{srm_index}", OctetString(unhexlify(psid))),        # rsuMsgRepeatPsid (hex)
-                    (f"{base_oid}.3.{srm_index}", Integer32(int(channel))),             # rsuMsgRepeatTxChannel (integer)
-                    (f"{base_oid}.4.{srm_index}", Integer32(int(interval))),            # rsuMsgRepeatTxInterval (integer)
-                    (f"{base_oid}.5.{srm_index}", OctetString(start_date_bytes)),       # rsuMsgRepeatDeliveryStart (DateAndTime)
-                    (f"{base_oid}.6.{srm_index}", OctetString(stop_date_bytes)),        # rsuMsgRepeatDeliveryStop (DateAndTime)
-                    (f"{base_oid}.7.{srm_index}", OctetString(unhexlify(payload))),     # rsuMsgRepeatPayload (hex)
-                    (f"{base_oid}.8.{srm_index}", Integer32(int(enable))),              # rsuMsgRepeatEnable (integer)
-                    (f"{base_oid}.9.{srm_index}", Integer32(4)),                        # rsuMsgRepeatStatus (4=createAndGo)
-                    (f"{base_oid}.10.{srm_index}", Integer32(int(priority))),           # rsuMsgRepeatPriority (integer)
-                    (f"{base_oid}.11.{srm_index}", OctetString(unhexlify(options)))     # rsuMsgRepeatOptions (BITS)
-                )
-
-                # Return RSU to operate mode
-                self._set_operate()
-
-                messagebox.showinfo("Success", f"Successfully configured SRM entry {srm_index} with PSID {psid}")
-                # Refresh the display
-                get_srm_info()
-
-            except Exception as e:
-                messagebox.showerror("SNMP Error", f"Failed to set SRM entry {srm_index}: {e}")
-
-        def add_srm_entry() -> None:
-            """Add a new configurable SRM entry form with configurable index."""
-            # Configurable index input (defaults to next available index or 1)
-            default_index = (srm_entries[-1]['index'] + 1) if srm_entries else 1
-            index_var = tk.IntVar(value=default_index)
-
-            # Create a frame for this entry
-            entry_frame = ttk.LabelFrame(config_frame, text=f"SRM Entry {index_var.get()}", padding=8)
-            row_pos = len(srm_entries)
-            entry_frame.grid(row=row_pos, column=0, sticky='ew', padx=4, pady=4)
-            entry_frame.columnconfigure(1, weight=1)
-            entry_frame.columnconfigure(3, weight=1)
-
-            # Create variables for this entry
-            idx_val = index_var.get()
             entry_vars = {
-                'index_var': index_var,
-                'psid': tk.StringVar(value='8002'),
-                'channel': tk.IntVar(value=180 if self.mode_mib_var.get() == "rsu41" else 183),
-                'interval': tk.IntVar(value=1000),
-                'start_date': tk.StringVar(value='2025-01-01,00:00:00.0'),
-                'stop_date': tk.StringVar(value='2030-01-01,00:00:00.0'),
-                'payload': tk.StringVar(value=''),
-                'enable': tk.IntVar(value=1),
-                'priority': tk.IntVar(value=6),
-                'options': tk.StringVar(value='01'),
-                'frame': entry_frame,
-                'index': idx_val
+                'frame': frame,
+                'index_spin': index_spin,
+                'psid_edit': psid_edit,
+                'dest_ip_edit': dest_ip_edit,
+                'dest_port_spin': dest_port_spin,
+                'protocol_combo': protocol_combo,
+                'rssi_spin': rssi_spin,
+                'interval_spin': interval_spin,
+                'secure_spin': secure_spin,
+                'start_date_edit': start_date_edit,
+                'stop_date_edit': stop_date_edit,
+                'auth_interval_spin': auth_interval_spin,
             }
 
-            # Row 0: Index and PSID
-            ttk.Label(entry_frame, text="SRM Index:").grid(row=0, column=0, sticky='e', padx=4, pady=2)
-            def on_index_change(*_args):
-                # Gracefully handle empty/non-integer input while typing
-                try:
-                    new_idx = int(index_var.get())
-                except Exception:
-                    # Keep previous index, do not crash while the field is temporarily empty
-                    new_idx = entry_vars.get('index', default_index)
-                # Clamp to valid range (1..32 typical, but allow >=1)
-                if new_idx < 1:
-                    new_idx = 1
-                    index_var.set(new_idx)
-                entry_vars['index'] = new_idx
-                entry_frame.configure(text=f"SRM Entry {entry_vars['index']}")
-            index_var.trace_add('write', on_index_change)
-            ttk.Entry(entry_frame, textvariable=index_var, width=8).grid(row=0, column=1, sticky='w', padx=4, pady=2)
+            index_spin.valueChanged.connect(
+                lambda v: frame.setTitle(f"RFM Entry {v}")
+            )
+            set_btn.clicked.connect(lambda: set_single_rfm_entry(entry_vars))
+            remove_btn.clicked.connect(lambda: remove_rfm_entry(entry_vars))
 
-            ttk.Label(entry_frame, text="PSID (hex):").grid(row=0, column=2, sticky='e', padx=4, pady=2)
-            ttk.Entry(entry_frame, textvariable=entry_vars['psid'], width=15).grid(row=0, column=3, sticky='ew', padx=4, pady=2)
+            config_inner_layout.insertWidget(config_inner_layout.count() - 1, frame)
+            rfm_entries.append(entry_vars)
 
-            # Row 1: Channel and Interval
-            ttk.Label(entry_frame, text="TX Channel:").grid(row=1, column=0, sticky='e', padx=4, pady=2)
-            ttk.Entry(entry_frame, textvariable=entry_vars['channel'], width=10, state="readonly").grid(row=1, column=1, sticky='w', padx=4, pady=2)
-            ttk.Label(entry_frame, text="TX Interval (ms):").grid(row=1, column=2, sticky='e', padx=4, pady=2)
-            ttk.Entry(entry_frame, textvariable=entry_vars['interval'], width=10).grid(row=1, column=3, sticky='ew', padx=4, pady=2)
+        def destroy_rfm_entry(idx: int) -> None:
+            delete_oid = f"1.3.6.1.4.1.1206.4.2.18.5.2.1.10.{idx}"
+            self._destroy_entry(delete_oid, on_done=get_rfm_info)
 
-            # Row 2: Start Date
-            ttk.Label(entry_frame, text="Start Date:").grid(row=2, column=0, sticky='e', padx=4, pady=2)
-            ttk.Entry(entry_frame, textvariable=entry_vars['start_date'], width=20).grid(row=2, column=1, columnspan=3, sticky='ew', padx=4, pady=2)
+        def get_rfm_info() -> None:
+            add_rfm_btn.setEnabled(True)
 
-            # Row 3: Stop Date
-            ttk.Label(entry_frame, text="Stop Date:").grid(row=3, column=0, sticky='e', padx=4, pady=2)
-            ttk.Entry(entry_frame, textvariable=entry_vars['stop_date'], width=20).grid(row=3, column=1, columnspan=3, sticky='ew', padx=4, pady=2)
+            def work():
+                session = self._get_session()
+                results = []
+                for i in range(1, 7):
+                    try:
+                        values = []
+                        for j in (2, 3, 4):
+                            handle = session.get(f"1.3.6.1.4.1.1206.4.2.18.5.2.1.{j}.{i}")
+                            varbind_list = handle.wait() if hasattr(handle, 'wait') else handle
+                            values.append(cr_helper.format_snmp_value(varbind_list[0]))
+                        results.append((i, values, None))
+                    except (Timeout, ErrorResponse) as e:
+                        results.append((i, None, str(e)))
+                return results
 
-            # Row 4: Payload
-            ttk.Label(entry_frame, text="Payload (hex):").grid(row=4, column=0, sticky='e', padx=4, pady=2)
-            ttk.Entry(entry_frame, textvariable=entry_vars['payload'], width=20).grid(row=4, column=1, columnspan=3, sticky='ew', padx=4, pady=2)
+            def on_ok(results):
+                rfm_table.setRowCount(0)
+                for i, values, err in results:
+                    row = rfm_table.rowCount()
+                    rfm_table.insertRow(row)
+                    rfm_table.setItem(row, 0, QTableWidgetItem(str(i)))
+                    if err is None:
+                        for col, v in enumerate(values, start=1):
+                            rfm_table.setItem(row, col, QTableWidgetItem(v))
+                        btn = QPushButton("Destroy")
+                        btn.clicked.connect(lambda _c=False, ii=i: destroy_rfm_entry(ii))
+                        rfm_table.setCellWidget(row, 4, btn)
+                    else:
+                        self._fill_error_row(rfm_table, row, err, data_cols=3)
 
-            # Row 5: Enable and Priority
-            ttk.Label(entry_frame, text="Enable (0/1):").grid(row=5, column=0, sticky='e', padx=4, pady=2)
-            ttk.Entry(entry_frame, textvariable=entry_vars['enable'], width=10).grid(row=5, column=1, sticky='w', padx=4, pady=2)
-            ttk.Label(entry_frame, text="Priority:").grid(row=5, column=2, sticky='e', padx=4, pady=2)
-            ttk.Entry(entry_frame, textvariable=entry_vars['priority'], width=10).grid(row=5, column=3, sticky='ew', padx=4, pady=2)
+            def on_err(e):
+                QMessageBox.critical(self, "SNMP Error", str(e))
 
-            # Row 6: Options
-            ttk.Label(entry_frame, text="Options (hex):").grid(row=6, column=0, sticky='e', padx=4, pady=2)
-            ttk.Entry(entry_frame, textvariable=entry_vars['options'], width=15).grid(row=6, column=1, columnspan=3, sticky='ew', padx=4, pady=2)
+            self._run_async(work, on_ok, on_err)
 
-            # Row 7: Button frame for Set and Remove buttons
-            button_frame = ttk.Frame(entry_frame)
-            button_frame.grid(row=7, column=0, columnspan=4, pady=4)
-            set_btn = ttk.Button(button_frame, text="Set Entry", command=lambda: set_single_srm_entry(entry_vars, entry_vars['index']))
-            set_btn.pack(side='left', padx=4)
-            remove_btn = ttk.Button(button_frame, text="Remove Entry", command=lambda: remove_srm_entry(entry_vars))
-            remove_btn.pack(side='left', padx=4)
+        add_rfm_btn = QPushButton("Add RFM Entry")
+        add_rfm_btn.setEnabled(False)
+        add_rfm_btn.clicked.connect(add_rfm_entry)
+        controls.addWidget(add_rfm_btn)
+        get_btn = QPushButton("Get RFM Info")
+        get_btn.clicked.connect(get_rfm_info)
+        controls.addWidget(get_btn)
+        help_btn = QPushButton("Help")
+        help_btn.clicked.connect(lambda: self._show_help("Received Message Forward", cr_helper.get_rfm_help_content()))
+        controls.addWidget(help_btn)
+        controls.addStretch(1)
 
-            srm_entries.append(entry_vars)
+        self.tabs.addTab(tab, "Received Message Forward")
+
+    # ---------- Store-and-Repeat tab ----------
+    def _create_store_and_repeat_tab(self) -> None:
+        tab = QWidget()
+        outer = QVBoxLayout(tab)
+        outer.setContentsMargins(12, 12, 12, 12)
+
+        controls = QHBoxLayout()
+        outer.addLayout(controls)
+
+        config_group = QGroupBox("Configure SRM Entries")
+        config_vbox = QVBoxLayout(config_group)
+        config_scroll = QScrollArea()
+        config_scroll.setWidgetResizable(True)
+        config_inner = QWidget()
+        config_inner_layout = QVBoxLayout(config_inner)
+        config_inner_layout.addStretch(1)
+        config_scroll.setWidget(config_inner)
+        config_vbox.addWidget(config_scroll)
+        outer.addWidget(config_group)
+
+        results_group = QGroupBox("SRM Results")
+        results_layout = QVBoxLayout(results_group)
+        srm_table = self._make_results_table(["Index", "PSID", "Payload", ""])
+        results_layout.addWidget(srm_table)
+        outer.addWidget(results_group, 1)
+
+        srm_entries: List[dict] = []
+
+        def destroy_srm_entry(idx: int) -> None:
+            delete_oid = f"1.3.6.1.4.1.1206.4.2.18.3.2.1.9.{idx}"
+            self._destroy_entry(delete_oid, on_done=get_srm_info)
+
+        def get_srm_info() -> None:
+            add_srm_btn.setEnabled(True)
+
+            def work():
+                session = self._get_session()
+                results = []
+                for i in range(1, 7):
+                    try:
+                        values = []
+                        for j in (2, 7):  # psid and payload
+                            handle = session.get(f"1.3.6.1.4.1.1206.4.2.18.3.2.1.{j}.{i}")
+                            varbind_list = handle.wait() if hasattr(handle, 'wait') else handle
+                            values.append(cr_helper.format_snmp_value(varbind_list[0]))
+                        results.append((i, values, None))
+                    except (Timeout, ErrorResponse) as e:
+                        results.append((i, None, str(e)))
+                return results
+
+            def on_ok(results):
+                srm_table.setRowCount(0)
+                for i, values, err in results:
+                    row = srm_table.rowCount()
+                    srm_table.insertRow(row)
+                    srm_table.setItem(row, 0, QTableWidgetItem(str(i)))
+                    if err is None:
+                        for col, v in enumerate(values, start=1):
+                            srm_table.setItem(row, col, QTableWidgetItem(v))
+                        btn = QPushButton("Destroy")
+                        btn.clicked.connect(lambda _c=False, ii=i: destroy_srm_entry(ii))
+                        srm_table.setCellWidget(row, 3, btn)
+                    else:
+                        self._fill_error_row(srm_table, row, err, data_cols=2)
+
+            def on_err(e):
+                QMessageBox.critical(self, "SNMP Error", str(e))
+
+            self._run_async(work, on_ok, on_err)
+
+        def set_single_srm_entry(entry_vars: dict) -> None:
+            srm_index = entry_vars['index_spin'].value()
+            psid = entry_vars['psid_edit'].text().strip()
+            channel = entry_vars['channel_spin'].value()
+            interval = entry_vars['interval_spin'].value()
+            start_date = entry_vars['start_date_edit'].text().strip()
+            stop_date = entry_vars['stop_date_edit'].text().strip()
+            payload = entry_vars['payload_edit'].text().strip()
+            enable = entry_vars['enable_spin'].value()
+            priority = entry_vars['priority_spin'].value()
+            options = entry_vars['options_edit'].text().strip()
+
+            if not psid:
+                QMessageBox.critical(self, "Validation Error", f"Entry {srm_index}: PSID cannot be empty")
+                return
+            if not payload:
+                QMessageBox.critical(self, "Validation Error", f"Entry {srm_index}: Payload cannot be empty")
+                return
+
+            try:
+                start_date_bytes = cr_helper.convert_datetime_to_snmp(start_date)
+                stop_date_bytes = cr_helper.convert_datetime_to_snmp(stop_date)
+            except ValueError as e:
+                QMessageBox.critical(self, "Validation Error", f"Entry {srm_index}: {e}")
+                return
+
+            def work():
+                self._set_standby()
+                session = self._get_session()
+                base_oid = "1.3.6.1.4.1.1206.4.2.18.3.2.1"
+                session.set(
+                    (f"{base_oid}.2.{srm_index}", OctetString(unhexlify(psid))),
+                    (f"{base_oid}.3.{srm_index}", Integer32(channel)),
+                    (f"{base_oid}.4.{srm_index}", Integer32(interval)),
+                    (f"{base_oid}.5.{srm_index}", OctetString(start_date_bytes)),
+                    (f"{base_oid}.6.{srm_index}", OctetString(stop_date_bytes)),
+                    (f"{base_oid}.7.{srm_index}", OctetString(unhexlify(payload))),
+                    (f"{base_oid}.8.{srm_index}", Integer32(enable)),
+                    (f"{base_oid}.9.{srm_index}", Integer32(4)),
+                    (f"{base_oid}.10.{srm_index}", Integer32(priority)),
+                    (f"{base_oid}.11.{srm_index}", OctetString(unhexlify(options))),
+                )
+                self._set_operate()
+
+            def on_ok(_):
+                QMessageBox.information(self, "Success", f"Successfully configured SRM entry {srm_index} with PSID {psid}")
+                get_srm_info()
+
+            def on_err(e):
+                QMessageBox.critical(self, "SNMP Error", f"Failed to set SRM entry {srm_index}: {e}")
+
+            self._run_async(work, on_ok, on_err)
 
         def remove_srm_entry(entry_vars: dict) -> None:
-            """Remove an SRM entry form."""
-            entry_vars['frame'].destroy()
+            frame = entry_vars['frame']
+            config_inner_layout.removeWidget(frame)
+            frame.setParent(None)
+            frame.deleteLater()
             srm_entries.remove(entry_vars)
-            # Update titles to reflect each entry's configured index
             for entry in srm_entries:
-                entry['frame'].configure(text=f"SRM Entry {entry['index']}")
+                entry['frame'].setTitle(f"SRM Entry {entry['index_spin'].value()}")
 
-        # Create buttons with "Add SRM Entry" initially disabled
-        add_srm_btn = ttk.Button(controls, text="Add SRM Entry", command=add_srm_entry, state='disabled')
-        add_srm_btn.pack(side='left', padx=6)
-        ttk.Button(controls, text="Get SRM Info", command=get_srm_info).pack(side='left', padx=6)
-        ttk.Button(controls, text="Help", command=lambda: self._show_help("Store-and-Repeat", cr_helper.get_srm_help_content())).pack(side='left', padx=6)
+        def add_srm_entry() -> None:
+            default_index = (srm_entries[-1]['index_spin'].value() + 1) if srm_entries else 1
+            default_channel = 180 if self.mode_mib == "rsu41" else 183
 
-    def create_active_message_tab(self, notebook):
-        """Create the Active Message tab"""
-        am_tab = ttk.Frame(notebook, padding=12)
-        notebook.add(am_tab, text="Send Active Message")
+            frame = QGroupBox(f"SRM Entry {default_index}")
+            grid = QGridLayout(frame)
+            grid.setHorizontalSpacing(6)
+            grid.setVerticalSpacing(4)
 
-        # Layout config
-        am_tab.columnconfigure(1, weight=1)
-        am_tab.columnconfigure(2, weight=1)
+            grid.addWidget(QLabel("SRM Index:"), 0, 0, ALIGN_RIGHT)
+            index_spin = _make_spinbox(default_index, 1, 32)
+            grid.addWidget(index_spin, 0, 1)
+            grid.addWidget(QLabel("PSID (hex):"), 0, 2, ALIGN_RIGHT)
+            psid_edit = _make_hex_edit("8002")
+            grid.addWidget(psid_edit, 0, 3)
 
-        # AMF input fields
-        r = 0
-        ttk.Label(am_tab, text="RSU IP Address:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
-        self.amf_rsu_var = tk.StringVar(value="192.168.55.20")
-        ttk.Entry(am_tab, textvariable=self.amf_rsu_var).grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
-        r += 1
-        ttk.Label(am_tab, text="RSU IFM Port:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
-        self.amf_port_var = tk.IntVar(value=1516)
-        ttk.Entry(am_tab, textvariable=self.amf_port_var).grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
-        r += 1
-        ttk.Label(am_tab, text="Message Type:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
-        self.msg_type_var = tk.StringVar(value="MAP")
-        ttk.Combobox(am_tab, textvariable=self.msg_type_var, values=["MAP", "SPAT", "BSM", "SRM", "SSM", "TIM", "PSM", "RSM", "SDSM"]).grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
-        r += 1
-        ttk.Label(am_tab, text="PSID:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
-        self.psid_var = tk.StringVar(value="8002")
-        ttk.Entry(am_tab, textvariable=self.psid_var).grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
-        r += 1
-        ttk.Label(am_tab, text="Priority:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
-        self.priority_var = tk.IntVar(value=3)
-        ttk.Entry(am_tab, textvariable=self.priority_var).grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
-        r += 1
-        ttk.Label(am_tab, text="Tx Mode:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
-        self.tx_mode_var = tk.StringVar(value="CONT")
-        ttk.Combobox(am_tab, textvariable=self.tx_mode_var, values=["CONT", "ALT"]).grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
-        r += 1
-        ttk.Label(am_tab, text="Tx Channel:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
-        self.tx_channel_var = tk.IntVar(value=183)
-        ttk.Entry(am_tab, textvariable=self.tx_channel_var, state="readonly").grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
-        r += 1
-        ttk.Label(am_tab, text="Tx Interval:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
-        self.tx_interval_var = tk.IntVar(value=0)
-        ttk.Entry(am_tab, textvariable=self.tx_interval_var, state="readonly").grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
-        r += 1
-        ttk.Label(am_tab, text="Signature:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
-        self.signature_var = tk.StringVar(value="False")
-        ttk.Combobox(am_tab, textvariable=self.signature_var, values=["True", "False"]).grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
-        r += 1
-        ttk.Label(am_tab, text="Encryption:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
-        self.encryption_var = tk.StringVar(value="False")
-        ttk.Combobox(am_tab, textvariable=self.encryption_var, values=["True", "False"]).grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
-        r += 1
-        ttk.Label(am_tab, text="Payload:").grid(row=r, column=0, sticky='e', padx=6, pady=6)
-        self.payload_var = tk.StringVar(value="")
-        ttk.Entry(am_tab, textvariable=self.payload_var).grid(row=r, column=1, columnspan=2, sticky='ew', padx=6, pady=6)
+            grid.addWidget(QLabel("TX Channel:"), 1, 0, ALIGN_RIGHT)
+            channel_spin = _make_spinbox(default_channel, 1, 255, readonly=True)
+            grid.addWidget(channel_spin, 1, 1)
+            grid.addWidget(QLabel("TX Interval (ms):"), 1, 2, ALIGN_RIGHT)
+            interval_spin = _make_spinbox(1000, 0, 1_000_000)
+            grid.addWidget(interval_spin, 1, 3)
+
+            grid.addWidget(QLabel("Start Date:"), 2, 0, ALIGN_RIGHT)
+            start_date_edit = QLineEdit("2025-01-01,00:00:00.0")
+            grid.addWidget(start_date_edit, 2, 1, 1, 3)
+
+            grid.addWidget(QLabel("Stop Date:"), 3, 0, ALIGN_RIGHT)
+            stop_date_edit = QLineEdit("2030-01-01,00:00:00.0")
+            grid.addWidget(stop_date_edit, 3, 1, 1, 3)
+
+            grid.addWidget(QLabel("Payload (hex):"), 4, 0, ALIGN_RIGHT)
+            payload_edit = _make_hex_edit("")
+            grid.addWidget(payload_edit, 4, 1, 1, 3)
+
+            grid.addWidget(QLabel("Enable:"), 5, 0, ALIGN_RIGHT)
+            enable_spin = _make_spinbox(1, 0, 1)
+            grid.addWidget(enable_spin, 5, 1)
+            grid.addWidget(QLabel("Priority:"), 5, 2, ALIGN_RIGHT)
+            priority_spin = _make_spinbox(6, 0, 63)
+            grid.addWidget(priority_spin, 5, 3)
+
+            grid.addWidget(QLabel("Options (hex):"), 6, 0, ALIGN_RIGHT)
+            options_edit = _make_hex_edit("01")
+            grid.addWidget(options_edit, 6, 1, 1, 3)
+
+            btn_row = QHBoxLayout()
+            btn_row.addStretch(1)
+            set_btn = QPushButton("Set Entry")
+            remove_btn = QPushButton("Remove Entry")
+            btn_row.addWidget(set_btn)
+            btn_row.addWidget(remove_btn)
+            btn_row.addStretch(1)
+            grid.addLayout(btn_row, 7, 0, 1, 4)
+
+            grid.setColumnStretch(1, 1)
+            grid.setColumnStretch(3, 1)
+
+            entry_vars = {
+                'frame': frame,
+                'index_spin': index_spin,
+                'psid_edit': psid_edit,
+                'channel_spin': channel_spin,
+                'interval_spin': interval_spin,
+                'start_date_edit': start_date_edit,
+                'stop_date_edit': stop_date_edit,
+                'payload_edit': payload_edit,
+                'enable_spin': enable_spin,
+                'priority_spin': priority_spin,
+                'options_edit': options_edit,
+            }
+
+            index_spin.valueChanged.connect(
+                lambda v: frame.setTitle(f"SRM Entry {v}")
+            )
+            set_btn.clicked.connect(lambda: set_single_srm_entry(entry_vars))
+            remove_btn.clicked.connect(lambda: remove_srm_entry(entry_vars))
+
+            config_inner_layout.insertWidget(config_inner_layout.count() - 1, frame)
+            srm_entries.append(entry_vars)
+
+        add_srm_btn = QPushButton("Add SRM Entry")
+        add_srm_btn.setEnabled(False)
+        add_srm_btn.clicked.connect(add_srm_entry)
+        controls.addWidget(add_srm_btn)
+        get_btn = QPushButton("Get SRM Info")
+        get_btn.clicked.connect(get_srm_info)
+        controls.addWidget(get_btn)
+        help_btn = QPushButton("Help")
+        help_btn.clicked.connect(lambda: self._show_help("Store-and-Repeat", cr_helper.get_srm_help_content()))
+        controls.addWidget(help_btn)
+        controls.addStretch(1)
+
+        self.tabs.addTab(tab, "Store-and-Repeat")
+
+    # ---------- Send Active Message tab ----------
+    def _create_active_message_tab(self) -> None:
+        tab = QWidget()
+        outer = QVBoxLayout(tab)
+        outer.setContentsMargins(12, 12, 12, 12)
+
+        form = QFormLayout()
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        outer.addLayout(form)
+
+        self.amf_rsu_edit = QLineEdit("192.168.55.20")
+        form.addRow("RSU IP Address:", self.amf_rsu_edit)
+
+        self.amf_port_spin = _make_spinbox(1516, 1, 65535)
+        form.addRow("RSU IFM Port:", self.amf_port_spin)
+
+        self.msg_type_combo = QComboBox()
+        self.msg_type_combo.setEditable(True)
+        self.msg_type_combo.addItems(["MAP", "SPAT", "BSM", "SRM", "SSM", "TIM", "PSM", "RSM", "SDSM"])
+        self.msg_type_combo.setCurrentText("MAP")
+        form.addRow("Message Type:", self.msg_type_combo)
+
+        self.psid_edit = _make_hex_edit("8002")
+        form.addRow("PSID:", self.psid_edit)
+
+        self.priority_spin = _make_spinbox(3, 0, 7)
+        form.addRow("Priority:", self.priority_spin)
+
+        self.tx_mode_combo = QComboBox()
+        self.tx_mode_combo.setEditable(True)
+        self.tx_mode_combo.addItems(["CONT", "ALT"])
+        self.tx_mode_combo.setCurrentText("CONT")
+        form.addRow("Tx Mode:", self.tx_mode_combo)
+
+        self.tx_channel_spin = _make_spinbox(183, 1, 255, readonly=True)
+        form.addRow("Tx Channel:", self.tx_channel_spin)
+
+        self.tx_interval_spin = _make_spinbox(0, 0, 1_000_000, readonly=True)
+        form.addRow("Tx Interval:", self.tx_interval_spin)
+
+        self.signature_combo = QComboBox()
+        self.signature_combo.setEditable(True)
+        self.signature_combo.addItems(["True", "False"])
+        self.signature_combo.setCurrentText("False")
+        form.addRow("Signature:", self.signature_combo)
+
+        self.encryption_combo = QComboBox()
+        self.encryption_combo.setEditable(True)
+        self.encryption_combo.addItems(["True", "False"])
+        self.encryption_combo.setCurrentText("False")
+        form.addRow("Encryption:", self.encryption_combo)
+
+        self.payload_edit = QLineEdit("")
+        form.addRow("Payload:", self.payload_edit)
 
         def send_amf() -> None:
-            """Send an Active Message File (AMF) to the RSU using UDP"""
             try:
                 amf = (
-                f"Version=0.7\n"
-                f"Type={self.msg_type_var.get()}\n"
-                f"PSID={self.psid_var.get()}\n"
-                f"Priority={self.priority_var.get()}\n"
-                f"TxMode={self.tx_mode_var.get()}\n"
-                f"TxChannel={self.tx_channel_var.get()}\n"
-                f"TxInterval={self.tx_interval_var.get()}\n"
-                f"DeliveryStart=\n"
-                f"DeliveryStop=\n"
-                f"Signature={self.signature_var.get()}\n"
-                f"Encryption={self.encryption_var.get()}\n"
-                f"Payload={self.payload_var.get()}"
+                    f"Version=0.7\n"
+                    f"Type={self.msg_type_combo.currentText()}\n"
+                    f"PSID={self.psid_edit.text()}\n"
+                    f"Priority={self.priority_spin.value()}\n"
+                    f"TxMode={self.tx_mode_combo.currentText()}\n"
+                    f"TxChannel={self.tx_channel_spin.value()}\n"
+                    f"TxInterval={self.tx_interval_spin.value()}\n"
+                    f"DeliveryStart=\n"
+                    f"DeliveryStop=\n"
+                    f"Signature={self.signature_combo.currentText()}\n"
+                    f"Encryption={self.encryption_combo.currentText()}\n"
+                    f"Payload={self.payload_edit.text()}"
                 )
                 hex_data = amf.encode('utf-8')
                 sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                sk.sendto(hex_data, (self.amf_rsu_var.get(), self.amf_port_var.get()))
-                messagebox.showinfo("AMF Sent", "Active Message File has been sent to the RSU.")
+                sk.sendto(hex_data, (self.amf_rsu_edit.text(), self.amf_port_spin.value()))
+                QMessageBox.information(self, "AMF Sent", "Active Message File has been sent to the RSU.")
             except Exception as e:
-                messagebox.showerror("Error Sending AMF", f"Failed to send Active Message File:\n{e}")
+                QMessageBox.critical(self, "Error Sending AMF", f"Failed to send Active Message File:\n{e}")
 
-        # Buttons
-        r += 1
-        button_frame = ttk.Frame(am_tab)
-        button_frame.grid(row=r, column=0, columnspan=4, sticky='ew', padx=6, pady=6)
-        ttk.Button(button_frame, text="Send Message", command=send_amf).pack(side='right', padx=6)
-        ttk.Button(button_frame, text="Help", command=lambda: self._show_help("Send Active Message", cr_helper.get_amf_help_content())).pack(side='right', padx=6)
+        button_row = QHBoxLayout()
+        button_row.addStretch(1)
+        help_btn = QPushButton("Help")
+        help_btn.clicked.connect(lambda: self._show_help("Send Active Message", cr_helper.get_amf_help_content()))
+        button_row.addWidget(help_btn)
+        send_btn = QPushButton("Send Message")
+        send_btn.clicked.connect(send_amf)
+        button_row.addWidget(send_btn)
+        outer.addLayout(button_row)
+        outer.addStretch(1)
 
-    # Methods
+        self.tabs.addTab(tab, "Send Active Message")
+
+    # ---------- SNMP sync helpers (run on worker thread) ----------
     def _get_rsu_mode(self) -> int:
-        """Get RSU mode.
-
-        Returns:
-            int: Current RSU mode value. 1=other, 2=standby, 3=operate
-        """
-        if self.mode_mib_var.get() == "ntcip1218":
+        if self.mode_mib == "ntcip1218":
             mode_oid = "1.3.6.1.4.1.1206.4.2.18.16.2.0"
         else:
             mode_oid = "1.0.15628.4.1.99.0"
-        try:
-            session = self._get_session()
-            handle = session.get(mode_oid)
-            varbind_list = handle.wait() if hasattr(handle, 'wait') else handle  # type: ignore
-            value_obj = varbind_list[0].value  # type: ignore
-            current_mode = value_obj.value if hasattr(value_obj, 'value') else value_obj
-            return current_mode
-        except Exception as e:
-            print(f"ERROR getting RSU mode: {e}")
-            raise
-
-    def _get_rsu_mode_status(self) -> None:
-        """Outputs current RSU mode status."""
-        mode_status_oid = "1.3.6.1.4.1.1206.4.2.18.16.3.0"
-        status_modes = {1: "other", 2: "standby", 3: "operate", 4: "fault"}
-
-        try:
-            session = self._get_session()
-            handle = session.get(mode_status_oid)
-            varbind_list = handle.wait() if hasattr(handle, 'wait') else handle  # type: ignore
-            value_obj = varbind_list[0].value  # type: ignore
-            mode_status = value_obj.value if hasattr(value_obj, 'value') else value_obj
-            self.results_text.configure(state='normal')
-            self.results_text.insert(tk.END, f"RSU Mode Status: {status_modes.get(mode_status, 'unknown')} ({mode_status})\n\n")
-            self.results_text.configure(state='disabled')
-            self.update_idletasks()
-        except Exception as e:
-            self.results_text.configure(state='normal')
-            self.results_text.insert(tk.END, f"ERROR getting RSU mode status: {e}\n\n")
-            self.results_text.configure(state='disabled')
-            self.update_idletasks()
-            raise
+        session = self._get_session()
+        handle = session.get(mode_oid)
+        varbind_list = handle.wait() if hasattr(handle, 'wait') else handle
+        value_obj = varbind_list[0].value
+        return value_obj.value if hasattr(value_obj, 'value') else value_obj
 
     def _set_rsu_mode(self, target: Dict[str, int]) -> None:
-        """Set RSU to target mode."""
-        if self.mode_mib_var.get() == "ntcip1218":
+        if self.mode_mib == "ntcip1218":
             mode_oid = "1.3.6.1.4.1.1206.4.2.18.16.2.0"
         else:
             mode_oid = "1.0.15628.4.1.99.0"
         target_name = list(target.keys())[0]
         target_mode = list(target.values())[0]
-        print(f"Setting RSU to {target_name} mode...")
 
+        current_mode = self._get_rsu_mode()
+        if current_mode == target_mode:
+            return
+
+        session = self._get_session()
+        session.set((mode_oid, Integer32(target_mode)))
         try:
-            # Check current mode
-            current_mode = self._get_rsu_mode()
-            if current_mode == target_mode:
-                print(f"RSU is already in {target_name} mode.")
-                return
-
-            # Set the mode
-            session = self._get_session()
-            response = session.set((mode_oid, Integer32(target_mode)))
-            print(f"Set response: {response}")
-
-            # If no exception was raised, the set operation succeeded
-            # The response contains variable bindings confirming the set operation
-            print(f"Successfully set RSU to {target_name} mode.")
-
-            # Optionally verify by reading back the mode
-            try:
-                verified_mode = self._get_rsu_mode()
-                if verified_mode != target_mode:
-                    print(f"Warning: Mode verification failed. Expected {target_mode}, got {verified_mode}")
-            except Exception as verify_error:
-                print(f"Note: Could not verify mode change: {verify_error}")
-
-        except (Timeout, ErrorResponse) as e:
-            print(f"SNMP error setting RSU mode: {type(e).__name__}: {e}")
-            raise
-        except Exception as e:
-            print(f"Error setting RSU mode: {type(e).__name__}: {e}")
-            raise
+            verified_mode = self._get_rsu_mode()
+            if verified_mode != target_mode:
+                print(f"Warning: Mode verification failed. Expected {target_mode}, got {verified_mode}")
+        except Exception as verify_error:
+            print(f"Note: Could not verify mode change: {verify_error}")
 
     def _set_standby(self) -> None:
-        """Set RSU to standby mode. NTCIP 1218: 2, RSU 4.1: 2."""
         self._set_rsu_mode({"standby": 2})
 
     def _set_operate(self) -> None:
-        """Set RSU to operate mode. NTCIP 1218: 3, RSU 4.1: 4."""
-        if self.mode_mib_var.get() == "ntcip1218":
+        if self.mode_mib == "ntcip1218":
             self._set_rsu_mode({"operate": 3})
         else:
             self._set_rsu_mode({"operate": 4})
 
+    # ---------- Top-level SNMP actions (async entry points) ----------
+    def _test_connection(self) -> None:
+        def work():
+            session = self._get_session()
+            handle = session.get('1.3.6.1.2.1.1.1.0')
+            varbind_list = handle.wait() if hasattr(handle, 'wait') else handle
+            return cr_helper.format_snmp_value(varbind_list[0])
+
+        def on_ok(value):
+            self._append_result(f"Connection OK: {value}")
+
+        def on_err(e):
+            if isinstance(e, (Timeout, ErrorResponse)):
+                self._append_result(f"Connection test failed: {e}")
+                self._append_result("Check your credentials and device accessibility.")
+                QMessageBox.critical(self, "Connection Error", f"Failed to connect to device:\n{e}")
+            else:
+                QMessageBox.critical(self, "Error", str(e))
+
+        self._run_async(work, on_ok, on_err)
+
+    def _get_rsu_mode_status(self) -> None:
+        mode_status_oid = "1.3.6.1.4.1.1206.4.2.18.16.3.0"
+        status_modes = {1: "other", 2: "standby", 3: "operate", 4: "fault"}
+
+        def work():
+            session = self._get_session()
+            handle = session.get(mode_status_oid)
+            varbind_list = handle.wait() if hasattr(handle, 'wait') else handle
+            value_obj = varbind_list[0].value
+            return value_obj.value if hasattr(value_obj, 'value') else value_obj
+
+        def on_ok(mode_status):
+            self._append_result(
+                f"RSU Mode Status: {status_modes.get(mode_status, 'unknown')} ({mode_status})"
+            )
+
+        def on_err(e):
+            self._append_result(f"ERROR getting RSU mode status: {e}")
+
+        self._run_async(work, on_ok, on_err)
+
+    def _destroy_entry(self, delete_oid: str, on_done: Optional[Callable[[], None]] = None) -> None:
+        def work():
+            self._set_standby()
+            session = self._get_session()
+            session.set((delete_oid, Integer32(6)))  # 6 = destroy
+            self._set_operate()
+
+        def on_ok(_):
+            if on_done is not None:
+                on_done()
+
+        def on_err(e):
+            QMessageBox.critical(self, "Error", f"Failed to destroy entry: {e}")
+
+        self._run_async(work, on_ok, on_err)
+
+    # ---------- Help dialog ----------
     def _show_help(self, tab_name: str, content: str) -> None:
-        """Show a help window for the given tab."""
-        help_window = tk.Toplevel(self)
-        help_window.title(f"{tab_name} Help")
-        help_window.geometry("600x400")
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"{tab_name} Help")
+        dialog.resize(600, 400)
 
-        # Create text widget with scrollbar
-        text_frame = ttk.Frame(help_window, padding=12)
-        text_frame.pack(fill='both', expand=True)
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(12, 12, 12, 12)
 
-        scrollbar = ttk.Scrollbar(text_frame)
-        scrollbar.pack(side='right', fill='y')
-
-        help_text = tk.Text(text_frame, wrap='word', yscrollcommand=scrollbar.set)
-        help_text.pack(side='left', fill='both', expand=True)
-        scrollbar.config(command=help_text.yview)
-
-        # Insert content
+        text_widget = QTextEdit()
+        text_widget.setReadOnly(True)
+        text_widget.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
         if content:
-            help_text.insert('1.0', content)
+            text_widget.setPlainText(content)
         else:
-            help_text.insert('1.0', f"Help content for {tab_name} will be added here.")
+            text_widget.setPlainText(f"Help content for {tab_name} will be added here.")
+        layout.addWidget(text_widget)
 
-        help_text.configure(state='disabled')
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dialog.close)
+        btn_row.addWidget(close_btn)
+        layout.addLayout(btn_row)
 
-        # Close button
-        button_frame = ttk.Frame(help_window, padding=12)
-        button_frame.pack(fill='x')
-        ttk.Button(button_frame, text="Close", command=help_window.destroy).pack(side='right')
+        dialog.exec()
 
+    # ---------- SNMP session ----------
     def _get_session(self):
-        """Create and return a new SNMP manager with current credentials."""
-        # Map protocol strings to snmp library constants
         auth_protocol_map = {
             "MD5": HmacMd5,
             "SHA": HmacSha,
@@ -1089,14 +1200,13 @@ class RSUConfigurationApp(tk.Tk):
             "AES": AesCfb128,
         }
 
-        auth_protocol = auth_protocol_map.get(self.auth_protocol_var.get(), HmacSha)
-        priv_protocol = priv_protocol_map.get(self.privacy_protocol_var.get(), AesCfb128)
+        auth_protocol = auth_protocol_map.get(self.auth_protocol_combo.currentText(), HmacSha)
+        priv_protocol = priv_protocol_map.get(self.privacy_protocol_combo.currentText(), AesCfb128)
 
-        username = self.snmpv3_user_var.get()
-        auth_password = self.auth_password_var.get()
-        priv_password = self.privacy_password_var.get()
+        username = self.snmpv3_user_edit.text()
+        auth_password = self.auth_password_edit.text()
+        priv_password = self.privacy_password_edit.text()
 
-        # Add user to engine if not already added
         try:
             snmp_engine.addUser(
                 username,
@@ -1106,52 +1216,24 @@ class RSUConfigurationApp(tk.Tk):
                 privSecret=priv_password.encode() if isinstance(priv_password, str) else priv_password,
             )
         except Exception:
-            # User may already exist; ignore error
             pass
 
-        # Create and return manager
-        hostname = self.hostname_var.get()
-        port = self.port_var.get()
+        hostname = self.hostname_edit.text()
+        port = self.port_spin.value()
         manager = snmp_engine.Manager((hostname, port), defaultUser=username)
         return manager
 
-    def _test_connection(self):
-        """Test SNMP connection by performing a simple GET operation."""
-        try:
-            session = self._get_session()
-            handle = session.get('1.3.6.1.2.1.1.1.0')  # sysDescr - standard OID
-            varbind_list = handle.wait() if hasattr(handle, 'wait') else handle  # type: ignore
-            formatted_value = cr_helper.format_snmp_value(varbind_list[0])  # type: ignore
-            self.results_text.configure(state='normal')
-            self.results_text.insert(tk.END, f"Connection OK: {formatted_value}\n\n")
-            self.results_text.configure(state='disabled')
-            self.update_idletasks()
-        except (Timeout, ErrorResponse) as e:
-            self.results_text.configure(state='normal')
-            self.results_text.insert(tk.END, f"Connection test failed: {e}\n")
-            self.results_text.insert(tk.END, "Check your credentials and device accessibility.\n")
-            self.results_text.configure(state='disabled')
-            messagebox.showerror("Connection Error", f"Failed to connect to device:\n{e}")
-            return
+    def _append_result(self, text: str) -> None:
+        self.results_text.append(text)
+        self.results_text.append("")
 
-    def _destroy_entry(self, delete_oid: str, entry_widget: ttk.Entry, button_widget: ttk.Button) -> None:
-        """Destroy entry for the given oid and update given UI row."""
-        try:
-            self._set_standby()
-            session = self._get_session()
-            session.set((delete_oid, Integer32(6))) # This OID (RowStatus) uses INTEGER32. 6 = destroy
-            self._set_operate()
-            # Remove the row from UI
-            entry_widget.destroy()
-            button_widget.destroy()
-        except (Timeout, ErrorResponse) as e:
-            messagebox.showerror("SNMP Error", str(e))
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to destroy entry: {e}")
 
-def main():
-    root = RSUConfigurationApp()
-    root.mainloop()
+def main() -> None:
+    app = QApplication(sys.argv)
+    window = RSUConfigurationApp()
+    window.show()
+    sys.exit(app.exec())
+
 
 if __name__ == "__main__":
     main()
