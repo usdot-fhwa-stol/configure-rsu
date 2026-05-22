@@ -176,12 +176,12 @@ Options: Bit-mapped options (BITS, hex):
     Bit 3: 0=ContXmit,     1=NoXmitLongTermXceeded
 """
 
-def get_rfm_help_content() -> str:
-    """Return help content for Received Message Forward tab."""
-    return """Received Message Forward (RFM) Configuration Help
+def get_tfm_help_content() -> str:
+    """Return help content for Transmitted Message Forward tab."""
+    return """Transmitted Message Forward (TFM) Configuration Help
 
-=== RFM Entry Fields ===
-For more information on each field, refer to the RSU SNMP MIB documentation section 5.6 Received Messages.
+=== TFM Entry Fields ===
+For more information on each field, refer to the RSU SNMP MIB documentation section 5.2 Transmitted Messages.
 https://www.ntcip.org/file/2025/01/NTCIP-1218-v01A-2024-AsPublished.pdf
 
 PSID: Provider Service Identifier (hex value)
@@ -197,14 +197,6 @@ Protocol: Transport protocol for forwarding
           1 = Other (A SET to a value of 'other' shall return a badValue error.)
           2 = UDP (User Datagram Protocol)
 
-RSSI: Received Signal Strength Indicator threshold (dBm)
-      Minimum signal strength required to forward message.
-      Typical value: -100 (dBm)
-
-Interval: Forwarding interval in deciseconds (1/10 second)
-          Controls how often messages are forwarded.
-          1 = 100ms, 10 = 1 second
-
 Start Date: Message forwarding start date/time
             Format: yyyy-mm-dd,hh:mm:ss.ms
             Example: 2025-01-01,00:00:00.0
@@ -219,9 +211,6 @@ Stop Date: Message forwarding stop date/time
 Secure: Security requirement for forwarded messages
         0 = Accept both secure and unsecure messages
         1 = Accept only secure messages
-
-Auth Msg Interval: Authentication message interval in deciseconds
-                   0 = No authentication messages
 """
 
 def get_srm_help_content() -> str:
