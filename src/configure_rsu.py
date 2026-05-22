@@ -741,6 +741,7 @@ class RSUConfigurationApp(QMainWindow):
 
         self.tabs.addTab(tab, "Received Message Forward")
 
+
     # ---------- Store-and-Repeat tab ----------
     def _create_store_and_repeat_tab(self) -> None:
         tab = QWidget()
