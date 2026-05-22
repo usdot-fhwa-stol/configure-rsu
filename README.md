@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- tkinter
+- PyQt6
 - snmp
 
 Run the [install.sh](/install/install.sh) script to install all dependencies and a desktop app icon.
