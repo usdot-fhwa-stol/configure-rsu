@@ -915,7 +915,7 @@ class RSUConfigurationApp(QMainWindow):
                     try:
                         values = []
                         for j in (2, 3, 4):
-                            handle = session.get(f"1.3.6.1.4.1.1206.4.2.18.20.2.1{j}.{i}")
+                            handle = session.get(f"1.3.6.1.4.1.1206.4.2.18.20.2.1.{j}.{i}")
                             varbind_list = handle.wait() if hasattr(handle, 'wait') else handle
                             values.append(cr_helper.format_snmp_value(varbind_list[0]))
                         results.append((i, values, None))
