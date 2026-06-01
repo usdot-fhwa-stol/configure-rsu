@@ -105,6 +105,7 @@ class RSUConfigurationApp(QMainWindow):
         self._create_credentials_tab()
         self._create_immediate_forward_tab()
         self._create_received_message_forward_tab()
+        self._create_transmitted_message_forward_tab()
         self._create_store_and_repeat_tab()
         self._create_active_message_tab()
 
@@ -740,6 +741,222 @@ class RSUConfigurationApp(QMainWindow):
         controls.addStretch(1)
 
         self.tabs.addTab(tab, "Received Message Forward")
+
+    # ---------- Transmitted Message Forward tab ----------
+    def _create_transmitted_message_forward_tab(self) -> None:
+        tab = QWidget()
+        outer = QVBoxLayout(tab)
+        outer.setContentsMargins(12, 12, 12, 12)
+
+        controls = QHBoxLayout()
+        outer.addLayout(controls)
+
+        config_group = QGroupBox("Configure TFM Entries")
+        config_vbox = QVBoxLayout(config_group)
+        config_scroll = QScrollArea()
+        config_scroll.setWidgetResizable(True)
+        config_inner = QWidget()
+        config_inner_layout = QVBoxLayout(config_inner)
+        config_inner_layout.addStretch(1)
+        config_scroll.setWidget(config_inner)
+        config_vbox.addWidget(config_scroll)
+        outer.addWidget(config_group)
+
+        results_group = QGroupBox("RFM Results")
+        results_layout = QVBoxLayout(results_group)
+        tfm_table = self._make_results_table(["Index", "PSID", "Dest IP", "Dest Port", ""])
+        results_layout.addWidget(tfm_table)
+        outer.addWidget(results_group, 1)
+
+        tfm_entries: List[dict] = []
+
+        def set_single_tfm_entry(entry_vars: dict) -> None:
+            tfm_index = entry_vars['index_spin'].value()
+            psid = entry_vars['psid_edit'].text().strip()
+            dest_ip = entry_vars['dest_ip_edit'].text().strip()
+            dest_port = entry_vars['dest_port_spin'].value()
+            protocol = int(entry_vars['protocol_combo'].currentText())
+            start_date = entry_vars['start_date_edit'].text().strip()
+            stop_date = entry_vars['stop_date_edit'].text().strip()
+            secure = entry_vars['secure_spin'].value()
+
+            if not psid:
+                QMessageBox.critical(self, "Validation Error", f"Entry {tfm_index}: PSID cannot be empty")
+                return
+            if not dest_ip:
+                QMessageBox.critical(self, "Validation Error", f"Entry {tfm_index}: Destination IP cannot be empty")
+                return
+
+            try:
+                start_date_bytes = cr_helper.convert_datetime_to_snmp(start_date)
+                stop_date_bytes = cr_helper.convert_datetime_to_snmp(stop_date)
+            except ValueError as e:
+                QMessageBox.critical(self, "Validation Error", f"Entry {tfm_index}: {e}")
+                return
+
+            def work():
+                self._set_standby()
+                session = self._get_session()
+                base_oid = "1.3.6.1.4.1.1206.4.2.18.20.2.1"
+                session.set(
+                    (f"{base_oid}.2.{tfm_index}", OctetString(unhexlify(psid))), # PSID
+                    (f"{base_oid}.3.{tfm_index}", OctetString(dest_ip.encode())), # Dest IP
+                    (f"{base_oid}.4.{tfm_index}", Integer32(dest_port)), # Dest Port
+                    (f"{base_oid}.5.{tfm_index}", Integer32(protocol)), # Protocol
+                    (f"{base_oid}.6.{tfm_index}", OctetString(start_date_bytes)), # Start Date
+                    (f"{base_oid}.7.{tfm_index}", OctetString(stop_date_bytes)), # Stop Date
+                    (f"{base_oid}.8.{tfm_index}", Integer32(secure)), # Secure
+                    (f"{base_oid}.9.{tfm_index}", Integer32(4)), # Status (4 = createAndGo)
+                )
+                self._set_operate()
+
+            def on_ok(_):
+                QMessageBox.information(self, "Success", f"Successfully configured TFM entry {tfm_index} with PSID {psid}")
+                get_tfm_info()
+
+            def on_err(e):
+                QMessageBox.critical(self, "SNMP Error", f"Failed to set TFM entry {tfm_index}: {e}")
+
+            self._run_async(work, on_ok, on_err)
+
+        def remove_tfm_entry(entry_vars: dict) -> None:
+            frame = entry_vars['frame']
+            config_inner_layout.removeWidget(frame)
+            frame.setParent(None)
+            frame.deleteLater()
+            tfm_entries.remove(entry_vars)
+            for entry in tfm_entries:
+                entry['frame'].setTitle(f"TFM Entry {entry['index_spin'].value()}")
+
+        def add_tfm_entry() -> None:
+            default_index = (tfm_entries[-1]['index_spin'].value() + 1) if tfm_entries else 1
+            default_psid = '8002' if default_index == 1 else '8003'
+
+            frame = QGroupBox(f"TFM Entry {default_index}")
+            grid = QGridLayout(frame)
+            grid.setHorizontalSpacing(6)
+            grid.setVerticalSpacing(4)
+
+            grid.addWidget(QLabel("TFM Index:"), 0, 0, ALIGN_RIGHT)
+            index_spin = _make_spinbox(default_index, 1, 32)
+            grid.addWidget(index_spin, 0, 1)
+            grid.addWidget(QLabel("PSID (hex):"), 0, 2, ALIGN_RIGHT)
+            psid_edit = _make_hex_edit(default_psid)
+            grid.addWidget(psid_edit, 0, 3)
+
+            grid.addWidget(QLabel("Dest IP:"), 1, 0, ALIGN_RIGHT)
+            dest_ip_edit = QLineEdit("192.168.55.152")
+            grid.addWidget(dest_ip_edit, 1, 1)
+            grid.addWidget(QLabel("Dest Port:"), 1, 2, ALIGN_RIGHT)
+            dest_port_spin = _make_spinbox(5398, 1, 65535)
+            grid.addWidget(dest_port_spin, 1, 3)
+
+            grid.addWidget(QLabel("Protocol:"), 2, 0, ALIGN_RIGHT)
+            protocol_combo = QComboBox()
+            protocol_combo.addItems(["2"])
+            protocol_combo.setCurrentText("2")
+            grid.addWidget(protocol_combo, 2, 1)
+            grid.addWidget(QLabel("Secure:"), 3, 2, ALIGN_RIGHT)
+            secure_spin = _make_spinbox(0, 0, 1)
+            grid.addWidget(secure_spin, 3, 3)
+
+            grid.addWidget(QLabel("Start Date:"), 4, 0, ALIGN_RIGHT)
+            start_date_edit = QLineEdit("2025-01-01,00:00:00.0")
+            grid.addWidget(start_date_edit, 4, 1, 1, 3)
+
+            grid.addWidget(QLabel("Stop Date:"), 5, 0, ALIGN_RIGHT)
+            stop_date_edit = QLineEdit("2030-01-01,00:00:00.0")
+            grid.addWidget(stop_date_edit, 5, 1, 1, 3)
+
+            btn_row = QHBoxLayout()
+            btn_row.addStretch(1)
+            set_btn = QPushButton("Set Entry")
+            remove_btn = QPushButton("Remove Entry")
+            btn_row.addWidget(set_btn)
+            btn_row.addWidget(remove_btn)
+            btn_row.addStretch(1)
+            grid.addLayout(btn_row, 7, 0, 1, 4)
+
+            grid.setColumnStretch(1, 1)
+            grid.setColumnStretch(3, 1)
+
+            entry_vars = {
+                'frame': frame,
+                'index_spin': index_spin,
+                'psid_edit': psid_edit,
+                'dest_ip_edit': dest_ip_edit,
+                'dest_port_spin': dest_port_spin,
+                'protocol_combo': protocol_combo,
+                'secure_spin': secure_spin,
+                'start_date_edit': start_date_edit,
+                'stop_date_edit': stop_date_edit,
+            }
+
+            index_spin.valueChanged.connect(
+                lambda v: frame.setTitle(f"TFM Entry {v}")
+            )
+            set_btn.clicked.connect(lambda: set_single_tfm_entry(entry_vars))
+            remove_btn.clicked.connect(lambda: remove_tfm_entry(entry_vars))
+
+            config_inner_layout.insertWidget(config_inner_layout.count() - 1, frame)
+            tfm_entries.append(entry_vars)
+
+        def destroy_tfm_entry(idx: int) -> None:
+            delete_oid = f"1.3.6.1.4.1.1206.4.2.18.20.2.1.9.{idx}"
+            self._destroy_entry(delete_oid, on_done=get_tfm_info)
+
+        def get_tfm_info() -> None:
+            add_tfm_btn.setEnabled(True)
+
+            def work():
+                session = self._get_session()
+                results = []
+                for i in range(1, 7):
+                    try:
+                        values = []
+                        for j in (2, 3, 4):
+                            handle = session.get(f"1.3.6.1.4.1.1206.4.2.18.20.2.1.{j}.{i}")
+                            varbind_list = handle.wait() if hasattr(handle, 'wait') else handle
+                            values.append(cr_helper.format_snmp_value(varbind_list[0]))
+                        results.append((i, values, None))
+                    except (Timeout, ErrorResponse) as e:
+                        results.append((i, None, str(e)))
+                return results
+
+            def on_ok(results):
+                tfm_table.setRowCount(0)
+                for i, values, err in results:
+                    row = tfm_table.rowCount()
+                    tfm_table.insertRow(row)
+                    tfm_table.setItem(row, 0, QTableWidgetItem(str(i)))
+                    if err is None:
+                        for col, v in enumerate(values, start=1):
+                            tfm_table.setItem(row, col, QTableWidgetItem(v))
+                        btn = QPushButton("Destroy")
+                        btn.clicked.connect(lambda _c=False, ii=i: destroy_tfm_entry(ii))
+                        tfm_table.setCellWidget(row, 4, btn)
+                    else:
+                        self._fill_error_row(tfm_table, row, err, data_cols=3)
+
+            def on_err(e):
+                QMessageBox.critical(self, "SNMP Error", str(e))
+
+            self._run_async(work, on_ok, on_err)
+
+        add_tfm_btn = QPushButton("Add TFM Entry")
+        add_tfm_btn.setEnabled(False)
+        add_tfm_btn.clicked.connect(add_tfm_entry)
+        controls.addWidget(add_tfm_btn)
+        get_btn = QPushButton("Get TFM Info")
+        get_btn.clicked.connect(get_tfm_info)
+        controls.addWidget(get_btn)
+        help_btn = QPushButton("Help")
+        help_btn.clicked.connect(lambda: self._show_help("Transmitted Message Forward", cr_helper.get_tfm_help_content()))
+        controls.addWidget(help_btn)
+        controls.addStretch(1)
+
+        self.tabs.addTab(tab, "Transmitted Message Forward")
+
 
     # ---------- Store-and-Repeat tab ----------
     def _create_store_and_repeat_tab(self) -> None:

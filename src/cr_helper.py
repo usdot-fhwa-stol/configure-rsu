@@ -175,6 +175,42 @@ Options: Bit-mapped options (BITS, hex):
     Bit 2: 0=ContXmit,     1=NoXmitShortTermXceeded
     Bit 3: 0=ContXmit,     1=NoXmitLongTermXceeded
 """
+def get_tfm_help_content() -> str:
+    """Return help content for Transmitted Message Forward tab."""
+    return """Transmitted Message Forward (TFM) Configuration Help
+
+=== TFM Entry Fields ===
+For more information on each field, refer to the RSU SNMP MIB documentation section 5.2 Transmitted Messages.
+https://www.ntcip.org/file/2025/01/NTCIP-1218-v01A-2024-AsPublished.pdf
+
+PSID: Provider Service Identifier (hex value)
+      Identifies the type of message to forward when received.
+
+Destination IP: IP address where received messages will be forwarded.
+                The IP address of the destination system.
+
+Destination Port: Port number for forwarding.
+                  The port on the destination system.
+
+Protocol: Transport protocol for forwarding
+          1 = Other (A SET to a value of 'other' shall return a badValue error.)
+          2 = UDP (User Datagram Protocol)
+
+Start Date: Message forwarding start date/time
+            Format: yyyy-mm-dd,hh:mm:ss.ms
+            Example: 2025-01-01,00:00:00.0
+            This is converted to SNMP DateAndTime format (8 octets)
+            Example: 2025-01-01,00:00:00.0 becomes 07 E9 01 01 00 00 00 00
+
+Stop Date: Message forwarding stop date/time
+           Format: yyyy-mm-dd,hh:mm:ss.ms
+           Example: 2030-01-01,00:00:00.0
+           This is converted to SNMP DateAndTime format (8 octets)
+
+Secure: Security requirement for forwarded messages
+        0 = Accept both secure and unsecure messages
+        1 = Accept only secure messages
+"""
 
 def get_rfm_help_content() -> str:
     """Return help content for Received Message Forward tab."""

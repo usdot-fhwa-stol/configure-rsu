@@ -26,13 +26,16 @@ The UI for this tool contains four separate tabs. Each tab is used for specific 
     - Set and test your SNMP user credentials in this tab. 
     - An exit/quit option is also available here.
 
-3. Immediate Forward
-    - Get/Destroy/Set immediate forward rules in this tab.
-
-4. Received Message Forward
+3. Received Message Forward
     - Get/Destroy/Set received message forward rules in this tab.
 
-5. Store-and-Repeat
+4. Immediate Forward
+    - Get/Destroy/Set immediate forward rules in this tab.
+
+5. Transmitted Message Forward
+    - Get/Destroy/Set transmitted message forward rules in this tab.
+
+6. Store-and-Repeat
     - Get/Destroy/Set store-and-repeat rules in this tab.
 
 ### Version
