@@ -26,7 +26,7 @@ PYTHON_BIN="$VENV_DIR/bin/python"
 "$PYTHON_BIN" -m pip install -U pip >/dev/null 2>&1 || true
 
 # Install Python dependencies from requirements.txt
-REQ_FILE="$REPO_ROOT/scripts/requirements.txt"
+REQ_FILE="$REPO_ROOT/install/requirements.txt"
 if [ -f "$REQ_FILE" ]; then
   "$PYTHON_BIN" -m pip install -r "$REQ_FILE"
 else
