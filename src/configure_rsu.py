@@ -85,6 +85,10 @@ class _Task(QRunnable):
 
 
 class RSUConfigurationApp(QMainWindow):
+    # Routed through a signal so _append_result is safe to call from SNMP
+    # worker threads; Qt marshals the append onto the GUI thread.
+    _result_logged = pyqtSignal(str)
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("RSU Configuration")
@@ -98,6 +102,8 @@ class RSUConfigurationApp(QMainWindow):
         # UI stays responsive and SNMP state transitions don't interleave.
         self._snmp_pool = QThreadPool()
         self._snmp_pool.setMaxThreadCount(1)
+
+        self._result_logged.connect(self._on_result_logged)
 
         # Tabs
         self.tabs = QTabWidget()
@@ -183,9 +189,12 @@ class RSUConfigurationApp(QMainWindow):
         self.privacy_password_edit.setEchoMode(QLineEdit.EchoMode.Password)
         form.addRow("Privacy Password:", self.privacy_password_edit)
 
-        # MIB version toggle for RSU mode OIDs
+        # RSU mode controls: MIB version toggle and mode actions
+        mode_group_box = QGroupBox("RSU Mode")
+        mode_box_layout = QVBoxLayout(mode_group_box)
+
         mode_row = QHBoxLayout()
-        mode_row.addWidget(QLabel("RSU Mode MIB:"))
+        mode_row.addWidget(QLabel("MIB:"))
         self.btn_mode_ntcip = QPushButton("NTCIP 1218")
         self.btn_mode_ntcip.setCheckable(True)
         self.btn_mode_ntcip.setChecked(True)
@@ -200,16 +209,28 @@ class RSUConfigurationApp(QMainWindow):
         mode_group.addButton(self.btn_mode_rsu41)
         self.btn_mode_ntcip.clicked.connect(lambda: self._set_mode_mib("ntcip1218"))
         self.btn_mode_rsu41.clicked.connect(lambda: self._set_mode_mib("rsu41"))
-        outer.addLayout(mode_row)
+        mode_box_layout.addLayout(mode_row)
 
-        # Buttons
+        mode_action_row = QHBoxLayout()
+        mode_status_btn = QPushButton("Get RSU Mode Status")
+        mode_status_btn.clicked.connect(self._get_rsu_mode_status)
+        mode_action_row.addWidget(mode_status_btn)
+        standby_btn = QPushButton("Set Standby")
+        standby_btn.clicked.connect(self._set_standby_mode)
+        mode_action_row.addWidget(standby_btn)
+        operate_btn = QPushButton("Set Operate")
+        operate_btn.clicked.connect(self._set_operate_mode)
+        mode_action_row.addWidget(operate_btn)
+        mode_action_row.addStretch(1)
+        mode_box_layout.addLayout(mode_action_row)
+
+        outer.addWidget(mode_group_box)
+
+        # Global action buttons
         button_row = QHBoxLayout()
         test_btn = QPushButton("Test Connection")
         test_btn.clicked.connect(self._test_connection)
         button_row.addWidget(test_btn)
-        mode_status_btn = QPushButton("Get RSU Mode Status")
-        mode_status_btn.clicked.connect(self._get_rsu_mode_status)
-        button_row.addWidget(mode_status_btn)
         button_row.addStretch(1)
         help_btn = QPushButton("Help")
         help_btn.clicked.connect(lambda: self._show_help("SNMP Credentials", ""))
@@ -1306,9 +1327,11 @@ class RSUConfigurationApp(QMainWindow):
         try:
             verified_mode = self._get_rsu_mode()
             if verified_mode != target_mode:
-                print(f"Warning: Mode verification failed. Expected {target_mode}, got {verified_mode}")
+                self._append_result(
+                    f"Warning: mode verification failed — expected {target_mode}, got {verified_mode}."
+                )
         except Exception as verify_error:
-            print(f"Note: Could not verify mode change: {verify_error}")
+            self._append_result(f"Note: could not verify mode change: {verify_error}")
 
     def _set_standby(self) -> None:
         self._set_rsu_mode({"standby": 2})
@@ -1360,6 +1383,24 @@ class RSUConfigurationApp(QMainWindow):
             self._append_result(f"ERROR getting RSU mode status: {e}")
 
         self._run_async(work, on_ok, on_err)
+
+    def _set_standby_mode(self) -> None:
+        def on_ok(_):
+            self._append_result("RSU mode set to standby.")
+
+        def on_err(e):
+            self._append_result(f"ERROR setting standby mode: {e}")
+
+        self._run_async(self._set_standby, on_ok, on_err)
+
+    def _set_operate_mode(self) -> None:
+        def on_ok(_):
+            self._append_result("RSU mode set to operate.")
+
+        def on_err(e):
+            self._append_result(f"ERROR setting operate mode: {e}")
+
+        self._run_async(self._set_operate, on_ok, on_err)
 
     def _destroy_entry(self, delete_oid: str, on_done: Optional[Callable[[], None]] = None) -> None:
         def work():
@@ -1441,6 +1482,11 @@ class RSUConfigurationApp(QMainWindow):
         return manager
 
     def _append_result(self, text: str) -> None:
+        # Emit rather than touch the widget directly so this is safe to call
+        # from worker threads (e.g. _set_rsu_mode); see _result_logged.
+        self._result_logged.emit(text)
+
+    def _on_result_logged(self, text: str) -> None:
         self.results_text.append(text)
         self.results_text.append("")
 
