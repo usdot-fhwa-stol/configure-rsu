@@ -3,16 +3,35 @@
 set -e
 sudo apt-get update
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PYTHON_BIN=${PYTHON:-python3}
-
 # Dependencies
 dependencies="python3 \
-    python3-pip" 
+    python3-pip"
 
-# Install dependencies, packages
+# Install preliminary dependencies
 sudo apt-get install -y $dependencies
-$PYTHON_BIN -m pip install -r "$REPO_ROOT/install/requirements.txt"
+
+# Declare local variables for paths and commands
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+VENV_DIR=${VENV_DIR:-"$REPO_ROOT/.venv"}
+SYSTEM_PYTHON=${PYTHON:-python3}
+
+# Create venv if missing
+if [ ! -x "$VENV_DIR/bin/python" ]; then
+  echo "Creating virtual environment at $VENV_DIR..."
+  "$SYSTEM_PYTHON" -m venv "$VENV_DIR"
+fi
+
+# Upgrade pip in the venv
+PYTHON_BIN="$VENV_DIR/bin/python"
+"$PYTHON_BIN" -m pip install -U pip >/dev/null 2>&1 || true
+
+# Install Python dependencies from requirements.txt
+REQ_FILE="$REPO_ROOT/scripts/requirements.txt"
+if [ -f "$REQ_FILE" ]; then
+  "$PYTHON_BIN" -m pip install -r "$REQ_FILE"
+else
+  echo "Warning: requirements.txt not found at $REQ_FILE; skipping Python dependency install." >&2
+fi
 
 # Create .env file with SNMP credentials if it doesn't exist
 SRC_ENV_FILE="$REPO_ROOT/src/.env"
