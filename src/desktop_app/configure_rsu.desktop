@@ -4,5 +4,5 @@ Name=Configure-RSU
 Comment=UI for RSU Configuration
 Exec=python3 %f configure_rsu.py
 Icon=rsu.png
-Terminal=true
+Terminal=false
 Categories=Utility;Network;
