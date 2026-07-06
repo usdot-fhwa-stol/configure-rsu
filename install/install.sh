@@ -4,8 +4,7 @@ set -e
 sudo apt-get update
 
 # Dependencies
-dependencies="python3 \
-    python3-pip"
+dependencies="python3"
 
 # Install preliminary dependencies
 sudo apt-get install -y $dependencies
