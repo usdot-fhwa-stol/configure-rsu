@@ -558,6 +558,14 @@ class RSUConfigurationApp(QMainWindow):
 
         rfm_entries: List[dict] = []
 
+        def update_field_states() -> None:
+            is_ntcip = self.mode_mib == "ntcip1218"
+            for entry in rfm_entries:
+                for w in entry.get('ntcip_widgets', []):
+                    w.setEnabled(is_ntcip)
+                for w in entry.get('rsu41_widgets', []):
+                    w.setEnabled(not is_ntcip)
+
         def set_single_rfm_entry(entry_vars: dict) -> None:
             rfm_index = entry_vars['index_spin'].value()
             psid = entry_vars['psid_edit'].text().strip()
@@ -570,6 +578,8 @@ class RSUConfigurationApp(QMainWindow):
             stop_date = entry_vars['stop_date_edit'].text().strip()
             secure = entry_vars['secure_spin'].value()
             auth_interval = entry_vars['auth_interval_spin'].value()
+            enable = entry_vars['enable_spin'].value()
+            mode_mib = self.mode_mib
 
             if not psid:
                 QMessageBox.critical(self, "Validation Error", f"Entry {rfm_index}: PSID cannot be empty")
@@ -579,8 +589,12 @@ class RSUConfigurationApp(QMainWindow):
                 return
 
             try:
-                start_date_bytes = cr_helper.convert_datetime_to_snmp(start_date)
-                stop_date_bytes = cr_helper.convert_datetime_to_snmp(stop_date)
+                if mode_mib == "ntcip1218":
+                    start_date_bytes = cr_helper.convert_datetime_to_snmp(start_date)
+                    stop_date_bytes = cr_helper.convert_datetime_to_snmp(stop_date)
+                else:
+                    start_date_bytes = cr_helper.convert_datetime_to_rsu41(start_date)
+                    stop_date_bytes = cr_helper.convert_datetime_to_rsu41(stop_date)
             except ValueError as e:
                 QMessageBox.critical(self, "Validation Error", f"Entry {rfm_index}: {e}")
                 return
@@ -588,20 +602,37 @@ class RSUConfigurationApp(QMainWindow):
             def work():
                 self._set_standby()
                 session = self._get_session()
-                base_oid = "1.3.6.1.4.1.1206.4.2.18.5.2.1"
-                session.set(
-                    (f"{base_oid}.2.{rfm_index}", OctetString(unhexlify(psid))),
-                    (f"{base_oid}.3.{rfm_index}", OctetString(dest_ip.encode())),
-                    (f"{base_oid}.4.{rfm_index}", Integer32(dest_port)),
-                    (f"{base_oid}.5.{rfm_index}", Integer32(protocol)),
-                    (f"{base_oid}.6.{rfm_index}", Integer32(rssi)),
-                    (f"{base_oid}.7.{rfm_index}", Integer32(interval)),
-                    (f"{base_oid}.8.{rfm_index}", OctetString(start_date_bytes)),
-                    (f"{base_oid}.9.{rfm_index}", OctetString(stop_date_bytes)),
-                    (f"{base_oid}.10.{rfm_index}", Integer32(4)),
-                    (f"{base_oid}.11.{rfm_index}", Integer32(secure)),
-                    (f"{base_oid}.12.{rfm_index}", Integer32(auth_interval)),
-                )
+                if mode_mib == "ntcip1218":
+                    base_oid = "1.3.6.1.4.1.1206.4.2.18.5.2.1"
+                    session.set(
+                        (f"{base_oid}.2.{rfm_index}", OctetString(unhexlify(psid))),
+                        (f"{base_oid}.3.{rfm_index}", OctetString(dest_ip.encode())),
+                        (f"{base_oid}.4.{rfm_index}", Integer32(dest_port)),
+                        (f"{base_oid}.5.{rfm_index}", Integer32(protocol)),
+                        (f"{base_oid}.6.{rfm_index}", Integer32(rssi)),
+                        (f"{base_oid}.7.{rfm_index}", Integer32(interval)),
+                        (f"{base_oid}.8.{rfm_index}", OctetString(start_date_bytes)),
+                        (f"{base_oid}.9.{rfm_index}", OctetString(stop_date_bytes)),
+                        (f"{base_oid}.10.{rfm_index}", Integer32(4)),
+                        (f"{base_oid}.11.{rfm_index}", Integer32(secure)),
+                        (f"{base_oid}.12.{rfm_index}", Integer32(auth_interval)),
+                    )
+                else:
+                    # RSU 4.1 rsuDsrcForwardTable (DSRC Forwarding, renamed to
+                    # Received Message Forwarding in NTCIP 1218).
+                    base_oid = "1.0.15628.4.1.7.1"
+                    session.set(
+                        (f"{base_oid}.2.{rfm_index}", OctetString(unhexlify(psid))),
+                        (f"{base_oid}.3.{rfm_index}", OctetString(dest_ip.encode())),
+                        (f"{base_oid}.4.{rfm_index}", Integer32(dest_port)),
+                        (f"{base_oid}.5.{rfm_index}", Integer32(protocol)),
+                        (f"{base_oid}.6.{rfm_index}", Integer32(rssi)),
+                        (f"{base_oid}.7.{rfm_index}", Integer32(interval)),
+                        (f"{base_oid}.8.{rfm_index}", OctetString(start_date_bytes)),
+                        (f"{base_oid}.9.{rfm_index}", OctetString(stop_date_bytes)),
+                        (f"{base_oid}.10.{rfm_index}", Integer32(enable)),
+                        (f"{base_oid}.11.{rfm_index}", Integer32(4)),
+                    )
                 self._set_operate()
 
             def on_ok(_):
@@ -672,6 +703,9 @@ class RSUConfigurationApp(QMainWindow):
             grid.addWidget(QLabel("Auth Msg Interval:"), 6, 0, ALIGN_RIGHT)
             auth_interval_spin = _make_spinbox(0, 0, 1_000_000)
             grid.addWidget(auth_interval_spin, 6, 1)
+            grid.addWidget(QLabel("Enable:"), 6, 2, ALIGN_RIGHT)
+            enable_spin = _make_spinbox(1, 0, 1)
+            grid.addWidget(enable_spin, 6, 3)
 
             btn_row = QHBoxLayout()
             btn_row.addStretch(1)
@@ -698,6 +732,9 @@ class RSUConfigurationApp(QMainWindow):
                 'start_date_edit': start_date_edit,
                 'stop_date_edit': stop_date_edit,
                 'auth_interval_spin': auth_interval_spin,
+                'enable_spin': enable_spin,
+                'ntcip_widgets': [secure_spin, auth_interval_spin],
+                'rsu41_widgets': [enable_spin],
             }
 
             index_spin.valueChanged.connect(
@@ -708,13 +745,21 @@ class RSUConfigurationApp(QMainWindow):
 
             config_inner_layout.insertWidget(config_inner_layout.count() - 1, frame)
             rfm_entries.append(entry_vars)
+            update_field_states()
 
         def destroy_rfm_entry(idx: int) -> None:
-            delete_oid = f"1.3.6.1.4.1.1206.4.2.18.5.2.1.10.{idx}"
+            if self.mode_mib == "ntcip1218":
+                delete_oid = f"1.3.6.1.4.1.1206.4.2.18.5.2.1.10.{idx}"
+            else:
+                delete_oid = f"1.0.15628.4.1.7.1.11.{idx}"
             self._destroy_entry(delete_oid, on_done=get_rfm_info)
 
         def get_rfm_info() -> None:
             add_rfm_btn.setEnabled(True)
+            base_oid = (
+                "1.3.6.1.4.1.1206.4.2.18.5.2.1"
+                if self.mode_mib == "ntcip1218" else "1.0.15628.4.1.7.1"
+            )
 
             def work():
                 session = self._get_session()
@@ -723,7 +768,7 @@ class RSUConfigurationApp(QMainWindow):
                     try:
                         values = []
                         for j in (2, 3, 4):
-                            handle = session.get(f"1.3.6.1.4.1.1206.4.2.18.5.2.1.{j}.{i}")
+                            handle = session.get(f"{base_oid}.{j}.{i}")
                             varbind_list = handle.wait() if hasattr(handle, 'wait') else handle
                             values.append(cr_helper.format_snmp_value(varbind_list[0]))
                         results.append((i, values, None))
@@ -750,6 +795,8 @@ class RSUConfigurationApp(QMainWindow):
                 QMessageBox.critical(self, "SNMP Error", str(e))
 
             self._run_async(work, on_ok, on_err)
+
+        self._register_mode_mib_callback(update_field_states)
 
         add_rfm_btn = QPushButton("Add RFM Entry")
         add_rfm_btn.setEnabled(False)
