@@ -259,6 +259,8 @@ class RSUConfigurationApp(QMainWindow):
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        table.setMinimumHeight(120)
         header = table.horizontalHeader()
         for i in range(len(headers)):
             if i == 0 or i == len(headers) - 1:
@@ -294,7 +296,7 @@ class RSUConfigurationApp(QMainWindow):
         config_inner_layout.addStretch(1)
         config_scroll.setWidget(config_inner)
         config_vbox.addWidget(config_scroll)
-        outer.addWidget(config_group)
+        outer.addWidget(config_group, 1)
 
         # Results table
         results_group = QGroupBox("IFM Results")
@@ -546,7 +548,7 @@ class RSUConfigurationApp(QMainWindow):
         config_inner_layout.addStretch(1)
         config_scroll.setWidget(config_inner)
         config_vbox.addWidget(config_scroll)
-        outer.addWidget(config_group)
+        outer.addWidget(config_group, 1)
 
         results_group = QGroupBox("RFM Results")
         results_layout = QVBoxLayout(results_group)
@@ -781,7 +783,7 @@ class RSUConfigurationApp(QMainWindow):
         config_inner_layout.addStretch(1)
         config_scroll.setWidget(config_inner)
         config_vbox.addWidget(config_scroll)
-        outer.addWidget(config_group)
+        outer.addWidget(config_group, 1)
 
         results_group = QGroupBox("RFM Results")
         results_layout = QVBoxLayout(results_group)
@@ -997,7 +999,7 @@ class RSUConfigurationApp(QMainWindow):
         config_inner_layout.addStretch(1)
         config_scroll.setWidget(config_inner)
         config_vbox.addWidget(config_scroll)
-        outer.addWidget(config_group)
+        outer.addWidget(config_group, 1)
 
         results_group = QGroupBox("SRM Results")
         results_layout = QVBoxLayout(results_group)
