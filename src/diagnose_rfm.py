@@ -35,6 +35,8 @@ BASE_OID = "1.0.15628.4.1.7.1"
 STANDBY = 2
 OPERATE = 4
 
+snmp_engine = None
+
 AUTH_PROTOCOLS = {"MD5": HmacMd5, "SHA": HmacSha, "SHA256": HmacSha256, "SHA512": HmacSha512}
 PRIV_PROTOCOLS = {"DES": DesCbc, "AES": AesCfb128}
 
@@ -58,7 +60,10 @@ def log(msg: str) -> None:
 
 
 def connect(args):
-    engine = Engine()
+    # Keep the Engine alive at module scope: if it is only referenced by a local,
+    # it gets garbage-collected on return and closes the Manager's socket.
+    global snmp_engine
+    engine = snmp_engine = Engine()
     engine.addUser(
         args.user,
         authProtocol=AUTH_PROTOCOLS[args.auth_protocol],
