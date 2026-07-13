@@ -42,6 +42,9 @@ PRIV_PASSWORD = os.getenv('PRIV_PASSWORD')
 MODE_POLL_INTERVAL = 1.0
 MODE_CHANGE_TIMEOUT = 15.0
 
+# Highest table index read back by the "Get ... Info" buttons.
+MAX_ENTRY_INDEX = 9
+
 ALIGN_RIGHT = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
 HEX_REGEX = QRegularExpression(r'^[0-9A-Fa-f]*$')
 
@@ -492,7 +495,7 @@ class RSUConfigurationApp(QMainWindow):
             def work():
                 session = self._get_session()
                 results = []
-                for i in range(1, 7):
+                for i in range(1, MAX_ENTRY_INDEX + 1):
                     try:
                         handle = session.get(f"{base_oid}.2.{i}")
                         varbind_list = handle.wait() if hasattr(handle, 'wait') else handle
@@ -776,7 +779,7 @@ class RSUConfigurationApp(QMainWindow):
             def work():
                 session = self._get_session()
                 results = []
-                for i in range(1, 7):
+                for i in range(1, MAX_ENTRY_INDEX + 1):
                     try:
                         values = []
                         for j in (2, 3, 4):
@@ -995,7 +998,7 @@ class RSUConfigurationApp(QMainWindow):
             def work():
                 session = self._get_session()
                 results = []
-                for i in range(1, 7):
+                for i in range(1, MAX_ENTRY_INDEX + 1):
                     try:
                         values = []
                         for j in (2, 3, 4):
@@ -1080,7 +1083,7 @@ class RSUConfigurationApp(QMainWindow):
             def work():
                 session = self._get_session()
                 results = []
-                for i in range(1, 7):
+                for i in range(1, MAX_ENTRY_INDEX + 1):
                     try:
                         values = []
                         for j in (2, 7):  # psid and payload
