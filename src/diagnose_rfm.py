@@ -183,6 +183,33 @@ def show_walk(session, root: str, label: str) -> None:
         log(f"    {oid} = {value}")
 
 
+def probe_gets(session, idx: int) -> None:
+    """Direct GETs of exact instance OIDs — the only access pattern the GUI uses.
+
+    This agent may not answer GETNEXT (walk) even for objects it serves via GET,
+    so a walk coming back empty proves nothing on its own.
+    """
+    targets = [
+        ("sysDescr",                  "1.3.6.1.2.1.1.1.0"),
+        ("rsuMode (4.1)",             "1.0.15628.4.1.99.0"),
+        ("rsuMode (NTCIP 1218)",      "1.3.6.1.4.1.1206.4.2.18.16.2.0"),
+        ("rsuModeStatus (NTCIP)",     "1.3.6.1.4.1.1206.4.2.18.16.3.0"),
+        (f"IFM psid       [{idx}]",   f"1.0.15628.4.1.5.1.2.{idx}"),
+        (f"IFM tx channel [{idx}]",   f"1.0.15628.4.1.5.1.3.{idx}"),
+        (f"IFM status     [{idx}]",   f"1.0.15628.4.1.5.1.7.{idx}"),
+        (f"RFM psid       [{idx}]",   f"{BASE_OID}.2.{idx}"),
+        (f"RFM dest ip    [{idx}]",   f"{BASE_OID}.3.{idx}"),
+        (f"RFM dest port  [{idx}]",   f"{BASE_OID}.4.{idx}"),
+        (f"RFM status     [{idx}]",   f"{BASE_OID}.11.{idx}"),
+    ]
+    log("  direct GETs (no GETNEXT — this is what the GUI actually does):")
+    for label, oid in targets:
+        try:
+            log(f"    {label:<24} {oid:<32} = {cr_helper.format_snmp_value(session.get(oid)[0])}")
+        except (Timeout, ErrorResponse) as e:
+            log(f"    {label:<24} {oid:<32} ! {e}")
+
+
 def show_row(session, idx: int, label: str) -> dict:
     log(f"  read-back of row {idx} ({label}):")
     row = read_row(session, idx)
@@ -324,8 +351,9 @@ def main() -> None:
         except (Timeout, ErrorResponse) as e:
             log(f"  sysDescr failed: {e}")
 
+        probe_gets(session, idx)
+
         mode = get_mode(session)
-        log(f"  rsuMode ({MODE_OID}) = {mode}")
         mib_alive = isinstance(mode, int)
 
         show_walk(session, "1.0.15628.4.1.7", "RSU 4.1 rsuDsrcForwardTable")
@@ -333,11 +361,12 @@ def main() -> None:
         show_walk(session, "1.0.15628.4.1.5", "RSU 4.1 rsuIFMTable (for comparison)")
 
         if not mib_alive:
-            log("\nSTOP: the RSU answers sysDescr but does not serve its own MIB — rsuMode "
-                "came back as NoSuchObject. The RSU's V2X application (the AgentX subagent "
-                "that registers the 1.0.15628 / NTCIP subtrees) is not registered with the "
-                "SNMP master agent. Nothing can be configured until it is: check the RSU "
-                "service on the device (or reboot it), then re-run with --walk-only.")
+            log(f"\nSTOP: rsuMode ({MODE_OID}) does not GET as an integer, so this run cannot "
+                "put the RSU into standby and any config write would be meaningless. Compare "
+                "the direct-GET results above: if the IFM OIDs answer but rsuMode does not, "
+                "the RSU MIB is partly served and the mode object is the problem. If nothing "
+                "under 1.0.15628 answers, the RSU's V2X application is not registered with "
+                "the SNMP master agent — restart it on the device and re-run.")
             return
 
         if args.walk_only:
