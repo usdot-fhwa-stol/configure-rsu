@@ -151,6 +151,24 @@ def convert_rsu41_ip_to_string(ip_bytes: bytes) -> str:
         return ''
     return '.'.join(str(b) for b in ip_bytes[12:])
 
+def format_snmp_hex(varbind) -> str:
+    """
+    Format an SNMP OctetString as a hex string, never as text.
+
+    Used for PSIDs: the RSU stores them minimally (0x0020 comes back as the
+    single byte 0x20), and format_snmp_value would decode that as printable
+    ASCII — a space — which reads as an empty cell.
+    """
+    value = varbind.value
+    data = getattr(value, 'data', value)
+
+    if isinstance(data, bytes):
+        return ' '.join(f'{b:02x}' for b in data)
+    if isinstance(data, str):
+        return ' '.join(f'{ord(c):02x}' for c in data)
+
+    return format_snmp_value(varbind)
+
 def format_snmp_value(varbind) -> str:
     """Format SNMP VarBind value, converting binary data to hex string if needed, and 8-byte octet strings to datetime."""
     # varbind has .value attribute which is an snmp.smi.ObjectSyntax object

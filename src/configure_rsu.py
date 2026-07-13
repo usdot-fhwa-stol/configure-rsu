@@ -499,7 +499,7 @@ class RSUConfigurationApp(QMainWindow):
                     try:
                         handle = session.get(f"{base_oid}.2.{i}")
                         varbind_list = handle.wait() if hasattr(handle, 'wait') else handle
-                        value = cr_helper.format_snmp_value(varbind_list[0])
+                        value = cr_helper.format_snmp_hex(varbind_list[0])  # PSID
                         results.append((i, value, None))
                     except (Timeout, ErrorResponse) as e:
                         results.append((i, None, str(e)))
@@ -785,7 +785,9 @@ class RSUConfigurationApp(QMainWindow):
                         for j in (2, 3, 4):
                             handle = session.get(f"{base_oid}.{j}.{i}")
                             varbind_list = handle.wait() if hasattr(handle, 'wait') else handle
-                            values.append(cr_helper.format_snmp_value(varbind_list[0]))
+                            # Column 2 is the PSID — always hex, never text.
+                            formatter = cr_helper.format_snmp_hex if j == 2 else cr_helper.format_snmp_value
+                            values.append(formatter(varbind_list[0]))
                         results.append((i, values, None))
                     except (Timeout, ErrorResponse) as e:
                         results.append((i, None, str(e)))
@@ -1004,7 +1006,9 @@ class RSUConfigurationApp(QMainWindow):
                         for j in (2, 3, 4):
                             handle = session.get(f"1.3.6.1.4.1.1206.4.2.18.20.2.1.{j}.{i}")
                             varbind_list = handle.wait() if hasattr(handle, 'wait') else handle
-                            values.append(cr_helper.format_snmp_value(varbind_list[0]))
+                            # Column 2 is the PSID — always hex, never text.
+                            formatter = cr_helper.format_snmp_hex if j == 2 else cr_helper.format_snmp_value
+                            values.append(formatter(varbind_list[0]))
                         results.append((i, values, None))
                     except (Timeout, ErrorResponse) as e:
                         results.append((i, None, str(e)))
@@ -1089,7 +1093,9 @@ class RSUConfigurationApp(QMainWindow):
                         for j in (2, 7):  # psid and payload
                             handle = session.get(f"1.3.6.1.4.1.1206.4.2.18.3.2.1.{j}.{i}")
                             varbind_list = handle.wait() if hasattr(handle, 'wait') else handle
-                            values.append(cr_helper.format_snmp_value(varbind_list[0]))
+                            # Column 2 is the PSID — always hex, never text.
+                            formatter = cr_helper.format_snmp_hex if j == 2 else cr_helper.format_snmp_value
+                            values.append(formatter(varbind_list[0]))
                         results.append((i, values, None))
                     except (Timeout, ErrorResponse) as e:
                         results.append((i, None, str(e)))
