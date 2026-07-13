@@ -156,6 +156,33 @@ def read_row(session, idx: int) -> dict:
     return row
 
 
+def walk(session, root: str, limit: int = 200) -> list:
+    """GETNEXT through a subtree; returns [(oid, formatted value)]."""
+    results = []
+    oid = root
+    while len(results) < limit:
+        try:
+            varbind = session.getNext(oid)[0]
+        except (Timeout, ErrorResponse) as e:
+            log(f"    walk stopped at {oid}: {e}")
+            break
+        next_oid = str(varbind.name)
+        if not next_oid.startswith(root + "."):
+            break
+        results.append((next_oid, cr_helper.format_snmp_value(varbind)))
+        oid = next_oid
+    return results
+
+
+def show_walk(session, root: str, label: str) -> None:
+    log(f"  walk of {label} ({root}):")
+    rows = walk(session, root)
+    if not rows:
+        log("    <empty — the RSU exposes nothing under this subtree>")
+    for oid, value in rows:
+        log(f"    {oid} = {value}")
+
+
 def show_row(session, idx: int, label: str) -> dict:
     log(f"  read-back of row {idx} ({label}):")
     row = read_row(session, idx)
@@ -185,6 +212,15 @@ def destroy_row(session, idx: int) -> None:
         log(f"  (row {idx} destroyed)")
     except (Timeout, ErrorResponse) as e:
         log(f"  (destroy of row {idx} returned {e} — probably no such row, fine)")
+
+
+def check_in_operate(session, idx: int, args, label: str) -> bool:
+    """Some agents only materialize config once the RSU returns to operate."""
+    log(f"  flipping to operate to see whether the row appears there...")
+    if not ensure_mode(session, OPERATE):
+        log("  could not reach operate mode")
+        return False
+    return row_matches(show_row(session, idx, f"in OPERATE, after {label}"), idx, args)
 
 
 def attempt_single_pdu(session, idx: int, args) -> bool:
@@ -267,6 +303,8 @@ def main() -> None:
     p.add_argument('--start-date', default='2025-01-01,00:00:00.0')
     p.add_argument('--stop-date', default='2030-01-01,00:00:00.0')
     p.add_argument('--skip-mode-timing', action='store_true')
+    p.add_argument('--walk-only', action='store_true',
+                   help='only dump what the RSU exposes; do not write anything')
     args = p.parse_args()
 
     if not args.host or not args.user:
@@ -280,6 +318,18 @@ def main() -> None:
     log(f"initial mode = {get_mode(session)}")
 
     try:
+        log("\n=== Part 0: what does this RSU actually expose? ===")
+        try:
+            log(f"  sysDescr = {cr_helper.format_snmp_value(session.get('1.3.6.1.2.1.1.1.0')[0])}")
+        except (Timeout, ErrorResponse) as e:
+            log(f"  sysDescr failed: {e}")
+        show_walk(session, "1.0.15628.4.1.7", "RSU 4.1 rsuDsrcForwardTable")
+        show_walk(session, "1.3.6.1.4.1.1206.4.2.18.5.2", "NTCIP 1218 rsuReceivedMsgTable")
+        show_walk(session, "1.0.15628.4.1.5", "RSU 4.1 rsuIFMTable (for comparison)")
+
+        if args.walk_only:
+            return
+
         if not args.skip_mode_timing:
             log("\n=== Part 1: mode transition timing ===")
             log("\nstandby:")
@@ -297,21 +347,30 @@ def main() -> None:
         show_row(session, idx, "before any writes")
 
         destroy_row(session, idx)
-        if attempt_single_pdu(session, idx, args):
+        persisted = attempt_single_pdu(session, idx, args)
+        persisted = persisted or check_in_operate(session, idx, args, "single-PDU createAndGo")
+        if persisted:
             log("\nRESULT: single-PDU createAndGo works and the values persist. "
                 "The GUI's PDU shape is fine — the bug is purely the mode race.")
             return
 
+        ensure_mode(session, STANDBY)
         destroy_row(session, idx)
-        if attempt_two_phase(session, idx, args):
+        persisted = attempt_two_phase(session, idx, args)
+        persisted = persisted or check_in_operate(session, idx, args, "two-phase creation")
+        if persisted:
             log("\nRESULT: two-phase createAndWait -> columns -> active works and the "
                 "values persist. The GUI should switch the RSU 4.1 path to this sequence.")
             return
 
+        ensure_mode(session, STANDBY)
         destroy_row(session, idx)
         attempt_per_column(session, idx, args)
-        log("\nRESULT: neither row-creation sequence persisted the values. See the "
-            "per-column results above for which column the agent rejects.")
+        check_in_operate(session, idx, args, "per-column SETs")
+        log("\nRESULT: neither row-creation sequence persisted the values, in standby "
+            "or in operate. See Part 0: if the RSU 4.1 subtree walks up empty, this RSU "
+            "is not serving rsuDsrcForwardTable at all and the GUI must use the NTCIP "
+            "1218 table instead.")
     finally:
         log("\nrestoring operate mode...")
         if ensure_mode(session, OPERATE):
