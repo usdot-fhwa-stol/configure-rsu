@@ -84,6 +84,27 @@ def convert_datetime_to_rsu41(date_str: str) -> bytes:
     except Exception as e:
         raise ValueError(f"Invalid date format '{date_str}'. Expected format: yyyy-mm-dd,hh:mm:ss.ms (e.g., 2025-01-01,00:00:00.0). Error: {e}")
 
+def convert_ip_to_rsu41(ip_str: str) -> bytes:
+    """
+    Convert a dotted-quad IPv4 address to the RSU 4.1 rsuDsrcFwdDestIpAddr
+    format: 16 octets, IPv4-mapped with 12 leading zero octets.
+
+    Example: "192.168.88.10" -> 00 00 00 00 00 00 00 00 00 00 00 00 c0 a8 58 0a
+    """
+    octets = ip_str.strip().split('.')
+    if len(octets) != 4:
+        raise ValueError(f"Invalid IPv4 address '{ip_str}'. Expected four dot-separated octets.")
+
+    try:
+        values = [int(o) for o in octets]
+    except ValueError as e:
+        raise ValueError(f"Invalid IPv4 address '{ip_str}'. Octets must be integers. Error: {e}")
+
+    if any(v < 0 or v > 255 for v in values):
+        raise ValueError(f"Invalid IPv4 address '{ip_str}'. Each octet must be 0-255.")
+
+    return bytes(12) + bytes(values)
+
 def convert_snmp_datetime_to_string(date_bytes: bytes) -> str:
     """
     Convert SNMP DateAndTime (8 octets) to human-readable format.
@@ -119,6 +140,17 @@ def convert_snmp_datetime_to_string(date_bytes: bytes) -> str:
         # If conversion fails, return as hex string
         return ' '.join(f'{b:02x}' for b in date_bytes)
 
+def convert_rsu41_ip_to_string(ip_bytes: bytes) -> str:
+    """
+    Convert a 16-octet IPv4-mapped rsuDsrcFwdDestIpAddr value back to dotted-quad.
+
+    Example: 00 * 12 + c0 a8 58 0a -> "192.168.88.10"
+    Returns an empty string if the value is not IPv4-mapped.
+    """
+    if len(ip_bytes) != 16 or any(ip_bytes[:12]):
+        return ''
+    return '.'.join(str(b) for b in ip_bytes[12:])
+
 def format_snmp_value(varbind) -> str:
     """Format SNMP VarBind value, converting binary data to hex string if needed, and 8-byte octet strings to datetime."""
     # varbind has .value attribute which is an snmp.smi.ObjectSyntax object
@@ -132,6 +164,12 @@ def format_snmp_value(varbind) -> str:
     if hasattr(value, 'data'):  # OctetString type
         data = value.data
         if isinstance(data, bytes):
+            # RSU 4.1 destination IP addresses are 16-octet IPv4-mapped values
+            if len(data) == 16:
+                ip_str = convert_rsu41_ip_to_string(data)
+                if ip_str:
+                    return ip_str
+
             # Check if this is an 8-byte DateAndTime value
             if len(data) == 8:
                 # Try to convert to datetime string
@@ -309,6 +347,8 @@ RSU 4.1 (rsuDsrcForwardTable, 1.0.15628.4.1.7.1):
     Uses Enable (0 = off, 1 = on) instead of Secure/Auth Msg Interval.
     Start/Stop dates are 6-octet values that drop the seconds/deciseconds
     (e.g. 2025-01-01,00:00 UTC -> 07 E9 01 01 00 00).
+    Destination IP is sent as a 16-octet IPv4-mapped value, not as text
+    (e.g. 192.168.88.10 -> 00...00 C0 A8 58 0A).
 """
 
 def get_srm_help_content() -> str:

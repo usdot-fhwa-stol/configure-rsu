@@ -2,6 +2,7 @@
 import os
 import socket
 import sys
+import time
 from binascii import unhexlify
 from typing import Any, Callable, Dict, List, Optional
 
@@ -36,6 +37,10 @@ SNMP_PORT = int(os.getenv('SNMP_PORT', 161))
 SNMP_USER = os.getenv('SNMP_USER')
 AUTH_PASSWORD = os.getenv('AUTH_PASSWORD')
 PRIV_PASSWORD = os.getenv('PRIV_PASSWORD')
+
+# A mode change takes about a second to take effect on the RSU.
+MODE_POLL_INTERVAL = 1.0
+MODE_CHANGE_TIMEOUT = 15.0
 
 ALIGN_RIGHT = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
 HEX_REGEX = QRegularExpression(r'^[0-9A-Fa-f]*$')
@@ -336,29 +341,31 @@ class RSUConfigurationApp(QMainWindow):
 
             def work():
                 self._set_standby()
-                session = self._get_session()
-                if mode_mib == "ntcip1218":
-                    base_oid = "1.3.6.1.4.1.1206.4.2.18.4.2.1"
-                    session.set(
-                        (f"{base_oid}.2.{ifm_index}", OctetString(unhexlify(psid))),
-                        (f"{base_oid}.3.{ifm_index}", Integer32(channel)),
-                        (f"{base_oid}.4.{ifm_index}", Integer32(enable)),
-                        (f"{base_oid}.5.{ifm_index}", Integer32(4)),
-                        (f"{base_oid}.6.{ifm_index}", Integer32(priority)),
-                        (f"{base_oid}.7.{ifm_index}", OctetString(unhexlify(options))),
-                        (f"{base_oid}.8.{ifm_index}", OctetString(unhexlify(payload))),
-                    )
-                else:
-                    base_oid = "1.0.15628.4.1.5.1"
-                    session.set(
-                        (f"{base_oid}.2.{ifm_index}", OctetString(unhexlify(psid))),
-                        (f"{base_oid}.3.{ifm_index}", Integer32(dsrc_msg_id)),
-                        (f"{base_oid}.4.{ifm_index}", Integer32(tx_mode)),
-                        (f"{base_oid}.5.{ifm_index}", Integer32(channel)),
-                        (f"{base_oid}.6.{ifm_index}", Integer32(enable)),
-                        (f"{base_oid}.7.{ifm_index}", Integer32(4)),
-                    )
-                self._set_operate()
+                try:
+                    session = self._get_session()
+                    if mode_mib == "ntcip1218":
+                        base_oid = "1.3.6.1.4.1.1206.4.2.18.4.2.1"
+                        session.set(
+                            (f"{base_oid}.2.{ifm_index}", OctetString(unhexlify(psid))),
+                            (f"{base_oid}.3.{ifm_index}", Integer32(channel)),
+                            (f"{base_oid}.4.{ifm_index}", Integer32(enable)),
+                            (f"{base_oid}.5.{ifm_index}", Integer32(4)),
+                            (f"{base_oid}.6.{ifm_index}", Integer32(priority)),
+                            (f"{base_oid}.7.{ifm_index}", OctetString(unhexlify(options))),
+                            (f"{base_oid}.8.{ifm_index}", OctetString(unhexlify(payload))),
+                        )
+                    else:
+                        base_oid = "1.0.15628.4.1.5.1"
+                        session.set(
+                            (f"{base_oid}.2.{ifm_index}", OctetString(unhexlify(psid))),
+                            (f"{base_oid}.3.{ifm_index}", Integer32(dsrc_msg_id)),
+                            (f"{base_oid}.4.{ifm_index}", Integer32(tx_mode)),
+                            (f"{base_oid}.5.{ifm_index}", Integer32(channel)),
+                            (f"{base_oid}.6.{ifm_index}", Integer32(enable)),
+                            (f"{base_oid}.7.{ifm_index}", Integer32(4)),
+                        )
+                finally:
+                    self._set_operate()
 
             def on_ok(_):
                 QMessageBox.information(self, "Success", f"Successfully configured IFM entry {ifm_index} with PSID {psid}")
@@ -592,48 +599,53 @@ class RSUConfigurationApp(QMainWindow):
                 if mode_mib == "ntcip1218":
                     start_date_bytes = cr_helper.convert_datetime_to_snmp(start_date)
                     stop_date_bytes = cr_helper.convert_datetime_to_snmp(stop_date)
+                    dest_ip_value = OctetString(dest_ip.encode())
                 else:
                     start_date_bytes = cr_helper.convert_datetime_to_rsu41(start_date)
                     stop_date_bytes = cr_helper.convert_datetime_to_rsu41(stop_date)
+                    # RSU 4.1 wants 16 octets, IPv4-mapped — not the ASCII text.
+                    dest_ip_value = OctetString(cr_helper.convert_ip_to_rsu41(dest_ip))
             except ValueError as e:
                 QMessageBox.critical(self, "Validation Error", f"Entry {rfm_index}: {e}")
                 return
 
             def work():
                 self._set_standby()
-                session = self._get_session()
-                if mode_mib == "ntcip1218":
-                    base_oid = "1.3.6.1.4.1.1206.4.2.18.5.2.1"
-                    session.set(
-                        (f"{base_oid}.2.{rfm_index}", OctetString(unhexlify(psid))),
-                        (f"{base_oid}.3.{rfm_index}", OctetString(dest_ip.encode())),
-                        (f"{base_oid}.4.{rfm_index}", Integer32(dest_port)),
-                        (f"{base_oid}.5.{rfm_index}", Integer32(protocol)),
-                        (f"{base_oid}.6.{rfm_index}", Integer32(rssi)),
-                        (f"{base_oid}.7.{rfm_index}", Integer32(interval)),
-                        (f"{base_oid}.8.{rfm_index}", OctetString(start_date_bytes)),
-                        (f"{base_oid}.9.{rfm_index}", OctetString(stop_date_bytes)),
-                        (f"{base_oid}.10.{rfm_index}", Integer32(4)),
-                        (f"{base_oid}.11.{rfm_index}", Integer32(secure)),
-                        (f"{base_oid}.12.{rfm_index}", Integer32(auth_interval)),
-                    )
-                else:
-                    # RSU 4.1 rsuDsrcForwardTable (DSRC Forwarding, renamed to
-                    # Received Message Forwarding in NTCIP 1218).
-                    base_oid = "1.0.15628.4.1.7.1"
-                    session.set(
-                        (f"{base_oid}.2.{rfm_index}", OctetString(unhexlify(psid))),
-                        (f"{base_oid}.3.{rfm_index}", OctetString(dest_ip.encode())),
-                        (f"{base_oid}.4.{rfm_index}", Integer32(dest_port)),
-                        (f"{base_oid}.5.{rfm_index}", Integer32(protocol)),
-                        (f"{base_oid}.6.{rfm_index}", Integer32(rssi)),
-                        (f"{base_oid}.7.{rfm_index}", Integer32(interval)),
-                        (f"{base_oid}.8.{rfm_index}", OctetString(start_date_bytes)),
-                        (f"{base_oid}.9.{rfm_index}", OctetString(stop_date_bytes)),
-                        (f"{base_oid}.10.{rfm_index}", Integer32(enable)),
-                        (f"{base_oid}.11.{rfm_index}", Integer32(4)),
-                    )
-                self._set_operate()
+                try:
+                    session = self._get_session()
+                    if mode_mib == "ntcip1218":
+                        base_oid = "1.3.6.1.4.1.1206.4.2.18.5.2.1"
+                        session.set(
+                            (f"{base_oid}.2.{rfm_index}", OctetString(unhexlify(psid))),
+                            (f"{base_oid}.3.{rfm_index}", dest_ip_value),
+                            (f"{base_oid}.4.{rfm_index}", Integer32(dest_port)),
+                            (f"{base_oid}.5.{rfm_index}", Integer32(protocol)),
+                            (f"{base_oid}.6.{rfm_index}", Integer32(rssi)),
+                            (f"{base_oid}.7.{rfm_index}", Integer32(interval)),
+                            (f"{base_oid}.8.{rfm_index}", OctetString(start_date_bytes)),
+                            (f"{base_oid}.9.{rfm_index}", OctetString(stop_date_bytes)),
+                            (f"{base_oid}.10.{rfm_index}", Integer32(4)),
+                            (f"{base_oid}.11.{rfm_index}", Integer32(secure)),
+                            (f"{base_oid}.12.{rfm_index}", Integer32(auth_interval)),
+                        )
+                    else:
+                        # RSU 4.1 rsuDsrcForwardTable (DSRC Forwarding, renamed to
+                        # Received Message Forwarding in NTCIP 1218).
+                        base_oid = "1.0.15628.4.1.7.1"
+                        session.set(
+                            (f"{base_oid}.2.{rfm_index}", OctetString(unhexlify(psid))),
+                            (f"{base_oid}.3.{rfm_index}", dest_ip_value),
+                            (f"{base_oid}.4.{rfm_index}", Integer32(dest_port)),
+                            (f"{base_oid}.5.{rfm_index}", Integer32(protocol)),
+                            (f"{base_oid}.6.{rfm_index}", Integer32(rssi)),
+                            (f"{base_oid}.7.{rfm_index}", Integer32(interval)),
+                            (f"{base_oid}.8.{rfm_index}", OctetString(start_date_bytes)),
+                            (f"{base_oid}.9.{rfm_index}", OctetString(stop_date_bytes)),
+                            (f"{base_oid}.10.{rfm_index}", Integer32(enable)),
+                            (f"{base_oid}.11.{rfm_index}", Integer32(4)),
+                        )
+                finally:
+                    self._set_operate()
 
             def on_ok(_):
                 QMessageBox.information(self, "Success", f"Successfully configured RFM entry {rfm_index} with PSID {psid}")
@@ -866,19 +878,21 @@ class RSUConfigurationApp(QMainWindow):
 
             def work():
                 self._set_standby()
-                session = self._get_session()
-                base_oid = "1.3.6.1.4.1.1206.4.2.18.20.2.1"
-                session.set(
-                    (f"{base_oid}.2.{tfm_index}", OctetString(unhexlify(psid))), # PSID
-                    (f"{base_oid}.3.{tfm_index}", OctetString(dest_ip.encode())), # Dest IP
-                    (f"{base_oid}.4.{tfm_index}", Integer32(dest_port)), # Dest Port
-                    (f"{base_oid}.5.{tfm_index}", Integer32(protocol)), # Protocol
-                    (f"{base_oid}.6.{tfm_index}", OctetString(start_date_bytes)), # Start Date
-                    (f"{base_oid}.7.{tfm_index}", OctetString(stop_date_bytes)), # Stop Date
-                    (f"{base_oid}.8.{tfm_index}", Integer32(secure)), # Secure
-                    (f"{base_oid}.9.{tfm_index}", Integer32(4)), # Status (4 = createAndGo)
-                )
-                self._set_operate()
+                try:
+                    session = self._get_session()
+                    base_oid = "1.3.6.1.4.1.1206.4.2.18.20.2.1"
+                    session.set(
+                        (f"{base_oid}.2.{tfm_index}", OctetString(unhexlify(psid))), # PSID
+                        (f"{base_oid}.3.{tfm_index}", OctetString(dest_ip.encode())), # Dest IP
+                        (f"{base_oid}.4.{tfm_index}", Integer32(dest_port)), # Dest Port
+                        (f"{base_oid}.5.{tfm_index}", Integer32(protocol)), # Protocol
+                        (f"{base_oid}.6.{tfm_index}", OctetString(start_date_bytes)), # Start Date
+                        (f"{base_oid}.7.{tfm_index}", OctetString(stop_date_bytes)), # Stop Date
+                        (f"{base_oid}.8.{tfm_index}", Integer32(secure)), # Secure
+                        (f"{base_oid}.9.{tfm_index}", Integer32(4)), # Status (4 = createAndGo)
+                    )
+                finally:
+                    self._set_operate()
 
             def on_ok(_):
                 QMessageBox.information(self, "Success", f"Successfully configured TFM entry {tfm_index} with PSID {psid}")
@@ -1126,21 +1140,23 @@ class RSUConfigurationApp(QMainWindow):
 
             def work():
                 self._set_standby()
-                session = self._get_session()
-                base_oid = "1.3.6.1.4.1.1206.4.2.18.3.2.1"
-                session.set(
-                    (f"{base_oid}.2.{srm_index}", OctetString(unhexlify(psid))),
-                    (f"{base_oid}.3.{srm_index}", Integer32(channel)),
-                    (f"{base_oid}.4.{srm_index}", Integer32(interval)),
-                    (f"{base_oid}.5.{srm_index}", OctetString(start_date_bytes)),
-                    (f"{base_oid}.6.{srm_index}", OctetString(stop_date_bytes)),
-                    (f"{base_oid}.7.{srm_index}", OctetString(unhexlify(payload))),
-                    (f"{base_oid}.8.{srm_index}", Integer32(enable)),
-                    (f"{base_oid}.9.{srm_index}", Integer32(4)),
-                    (f"{base_oid}.10.{srm_index}", Integer32(priority)),
-                    (f"{base_oid}.11.{srm_index}", OctetString(unhexlify(options))),
-                )
-                self._set_operate()
+                try:
+                    session = self._get_session()
+                    base_oid = "1.3.6.1.4.1.1206.4.2.18.3.2.1"
+                    session.set(
+                        (f"{base_oid}.2.{srm_index}", OctetString(unhexlify(psid))),
+                        (f"{base_oid}.3.{srm_index}", Integer32(channel)),
+                        (f"{base_oid}.4.{srm_index}", Integer32(interval)),
+                        (f"{base_oid}.5.{srm_index}", OctetString(start_date_bytes)),
+                        (f"{base_oid}.6.{srm_index}", OctetString(stop_date_bytes)),
+                        (f"{base_oid}.7.{srm_index}", OctetString(unhexlify(payload))),
+                        (f"{base_oid}.8.{srm_index}", Integer32(enable)),
+                        (f"{base_oid}.9.{srm_index}", Integer32(4)),
+                        (f"{base_oid}.10.{srm_index}", Integer32(priority)),
+                        (f"{base_oid}.11.{srm_index}", OctetString(unhexlify(options))),
+                    )
+                finally:
+                    self._set_operate()
 
             def on_ok(_):
                 QMessageBox.information(self, "Success", f"Successfully configured SRM entry {srm_index} with PSID {psid}")
@@ -1367,20 +1383,23 @@ class RSUConfigurationApp(QMainWindow):
         target_name = list(target.keys())[0]
         target_mode = list(target.values())[0]
 
-        current_mode = self._get_rsu_mode()
-        if current_mode == target_mode:
-            return
-
-        session = self._get_session()
-        session.set((mode_oid, Integer32(target_mode)))
-        try:
-            verified_mode = self._get_rsu_mode()
-            if verified_mode != target_mode:
-                self._append_result(
-                    f"Warning: mode verification failed — expected {target_mode}, got {verified_mode}."
+        # The RSU applies a mode change asynchronously (~1s), so a single
+        # read-back right after the SET still reports the old mode. Re-issue the
+        # SET and poll until the GET confirms the new mode, or give up — writing
+        # config while the RSU is still in operate is rejected with a genErr.
+        deadline = time.monotonic() + MODE_CHANGE_TIMEOUT
+        while True:
+            current_mode = self._get_rsu_mode()
+            if current_mode == target_mode:
+                return
+            if time.monotonic() >= deadline:
+                raise RuntimeError(
+                    f"RSU did not enter {target_name} mode within {MODE_CHANGE_TIMEOUT:.0f}s "
+                    f"(expected {target_mode}, still reading {current_mode})."
                 )
-        except Exception as verify_error:
-            self._append_result(f"Note: could not verify mode change: {verify_error}")
+            session = self._get_session()
+            session.set((mode_oid, Integer32(target_mode)))
+            time.sleep(MODE_POLL_INTERVAL)
 
     def _set_standby(self) -> None:
         self._set_rsu_mode({"standby": 2})
@@ -1454,9 +1473,11 @@ class RSUConfigurationApp(QMainWindow):
     def _destroy_entry(self, delete_oid: str, on_done: Optional[Callable[[], None]] = None) -> None:
         def work():
             self._set_standby()
-            session = self._get_session()
-            session.set((delete_oid, Integer32(6)))  # 6 = destroy
-            self._set_operate()
+            try:
+                session = self._get_session()
+                session.set((delete_oid, Integer32(6)))  # 6 = destroy
+            finally:
+                self._set_operate()
 
         def on_ok(_):
             if on_done is not None:

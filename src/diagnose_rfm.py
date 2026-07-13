@@ -133,7 +133,7 @@ def data_varbinds(idx: int, args):
     stop = cr_helper.convert_datetime_to_rsu41(args.stop_date)
     return [
         (f"{BASE_OID}.2.{idx}", OctetString(unhexlify(args.psid))),
-        (f"{BASE_OID}.3.{idx}", OctetString(args.dest_ip.encode())),
+        (f"{BASE_OID}.3.{idx}", OctetString(cr_helper.convert_ip_to_rsu41(args.dest_ip))),
         (f"{BASE_OID}.4.{idx}", Integer32(args.dest_port)),
         (f"{BASE_OID}.5.{idx}", Integer32(2)),          # protocol: UDP
         (f"{BASE_OID}.6.{idx}", Integer32(args.rssi)),
