@@ -315,17 +315,30 @@ def main() -> None:
         f"({args.auth_protocol}/{args.priv_protocol}), RFM index {idx}\n")
 
     session = connect(args)
-    log(f"initial mode = {get_mode(session)}")
 
+    mib_alive = False
     try:
         log("\n=== Part 0: what does this RSU actually expose? ===")
         try:
             log(f"  sysDescr = {cr_helper.format_snmp_value(session.get('1.3.6.1.2.1.1.1.0')[0])}")
         except (Timeout, ErrorResponse) as e:
             log(f"  sysDescr failed: {e}")
+
+        mode = get_mode(session)
+        log(f"  rsuMode ({MODE_OID}) = {mode}")
+        mib_alive = isinstance(mode, int)
+
         show_walk(session, "1.0.15628.4.1.7", "RSU 4.1 rsuDsrcForwardTable")
         show_walk(session, "1.3.6.1.4.1.1206.4.2.18.5.2", "NTCIP 1218 rsuReceivedMsgTable")
         show_walk(session, "1.0.15628.4.1.5", "RSU 4.1 rsuIFMTable (for comparison)")
+
+        if not mib_alive:
+            log("\nSTOP: the RSU answers sysDescr but does not serve its own MIB — rsuMode "
+                "came back as NoSuchObject. The RSU's V2X application (the AgentX subagent "
+                "that registers the 1.0.15628 / NTCIP subtrees) is not registered with the "
+                "SNMP master agent. Nothing can be configured until it is: check the RSU "
+                "service on the device (or reboot it), then re-run with --walk-only.")
+            return
 
         if args.walk_only:
             return
@@ -372,11 +385,15 @@ def main() -> None:
             "is not serving rsuDsrcForwardTable at all and the GUI must use the NTCIP "
             "1218 table instead.")
     finally:
-        log("\nrestoring operate mode...")
-        if ensure_mode(session, OPERATE):
-            log("RSU is back in operate mode")
-        else:
-            log("WARNING: could not restore operate mode — check the RSU")
+        if mib_alive:
+            log("\nrestoring operate mode...")
+            try:
+                if ensure_mode(session, OPERATE):
+                    log("RSU is back in operate mode")
+                else:
+                    log("WARNING: could not restore operate mode — check the RSU")
+            except (Timeout, ErrorResponse) as e:
+                log(f"WARNING: could not restore operate mode: {e} — check the RSU")
 
 
 if __name__ == '__main__':
