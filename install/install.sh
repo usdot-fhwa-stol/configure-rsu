@@ -49,11 +49,11 @@ else
 fi
 
 # Declare desktop entry and icon paths
-DESKTOP_SRC="$REPO_ROOT/src/desktop_app/configure_rsu.desktop"
+DESKTOP_SRC="$REPO_ROOT/src/desktop_app/configure_rsu_CSE-81.desktop"
 ICON_SRC="$REPO_ROOT/src/desktop_app/rsu.png"
 USER_DESKTOP="$HOME/Desktop"
 LOCAL_ICON_DIR="$HOME/.local/share/icons/hicolor/256x256/apps"
-LOCAL_ICON_NAME="configure_rsu.png"
+LOCAL_ICON_NAME="configure_rsu_CSE-81.png"
 
 # Create necessary directories
 mkdir -p "$USER_DESKTOP" "$LOCAL_ICON_DIR"
