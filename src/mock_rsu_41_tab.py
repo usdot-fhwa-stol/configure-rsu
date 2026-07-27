@@ -6,7 +6,15 @@ import sys
 import time
 from typing import Dict, List, Optional
 
-from PyQt6.QtCore import Qt, QObject, QRegularExpression, QRunnable, QThread, QThreadPool, pyqtSignal
+from PyQt6.QtCore import (
+    QObject,
+    QRegularExpression,
+    QRunnable,
+    Qt,
+    QThread,
+    QThreadPool,
+    pyqtSignal,
+)
 from PyQt6.QtGui import QRegularExpressionValidator
 from PyQt6.QtWidgets import (
     QAbstractSpinBox,
@@ -117,14 +125,18 @@ class _BroadcastWorker(QThread):
         # Ensure write destination for pcap / raw dump file
         dump_file = open(self.dump_filepath, "a")
 
-        self.signals.log.emit(f"Starting broadcast sequence to {self.target_ip}:{self.target_port}...")
+        self.signals.log.emit(
+            f"Starting broadcast sequence to {self.target_ip}:{self.target_port}..."
+        )
         self.signals.log.emit(f"Dumping traffic records to: {self.dump_filepath}")
 
         for msg_type in self.selected_msgs:
             if self._stop_requested:
                 break
 
-            self.signals.log.emit(f"\n--- Broadcasting [{msg_type}] for {self.period_sec}s ---")
+            self.signals.log.emit(
+                f"\n--- Broadcasting [{msg_type}] for {self.period_sec}s ---"
+            )
 
             start_time = time.time()
             total_sent_bytes = 0
@@ -141,11 +153,15 @@ class _BroadcastWorker(QThread):
                     f"Version=0.7\n"
                     f"Type={msg_type}\n"
                     f"PSID={self.psid}\n"
-                    f"Security={self.security}\n"
-                    f"IsSigned={self.is_signed}\n"
-                    f"ShouldRsuSign={self.rsu_sign}\n"
+                    f"Priority={7}\n"
+                    f"TxMode=CONT\n"
+                    f"TxChannel={172}\n"
+                    f"TxInterval={0}\n"
+                    f"DeliveryStart=\n"
+                    f"DeliveryStop=\n"
+                    f"Signature={self.rsu_sign and self.is_signed}\n"
+                    f"Encryption={self.security}\n"
                     f"Payload={self.payload_hex}\n"
-                    f"Timestamp={time.time()}\n"
                 )
                 data = amf_content.encode("utf-8")
 
@@ -297,22 +313,22 @@ def _create_mock_rsu_41_tab(self) -> None:
     self.freq_spin.setRange(0.1, 100.0)
     self.freq_spin.setValue(10.0)
     self.freq_spin.setSuffix(" Hz")
-    form.addRow("Frequency Rate:", self.freq_spin)
+    form.addRow("Frequency:", self.freq_spin)
 
-    self.period_spin = _make_spinbox(60, 1, 3600)  # Default 1 min (60 seconds)
+    self.period_spin = _make_spinbox(60, 1, 3600)  # Default 60 seconds
     self.period_spin.setSuffix(" sec")
     form.addRow("Period (Duration/Msg):", self.period_spin)
 
     self.psid_edit = _make_hex_edit("8002")
     form.addRow("PSID:", self.psid_edit)
 
-    self.security_edit = QLineEdit("unsecured")
-    form.addRow("Security Setting:", self.security_edit)
-
+    
     self.chk_is_signed = QCheckBox("Is Message Signed")
     self.chk_rsu_sign = QCheckBox("Should RSU Sign Message")
-    form.addRow(self.chk_is_signed)
-    form.addRow(self.chk_rsu_sign)
+    form.addRow("Signature:", self.chk_is_signed, self.chk_rsu_sign)
+    
+    self.security_edit = QCheckBox("")
+    form.addRow("Security:", self.security_edit)
 
     self.payload_dict_combo = QComboBox()
     self.payload_dict_combo.addItems(sorted(PAYLOAD_DICT.keys()))
@@ -340,10 +356,12 @@ def _create_mock_rsu_41_tab(self) -> None:
     msg_box = QGroupBox("Select Message Types to Broadcast")
     msg_box_layout = QVBoxLayout(msg_box)
     self.msg_list_widget = QListWidget()
-    msg_types = ["MAP", "SPAT", "BSM", "SRM", "SSM", "TIM", "PSM", "RSM", "SDSM"]
+    msg_types = ["MAP", "SPAT", "BSM", "SDSM"]
     for m in msg_types:
         item = QListWidgetItem(m)
-        item.setCheckState(Qt.CheckState.Checked if m in ["MAP", "SPAT"] else Qt.CheckState.Unchecked)
+        item.setCheckState(
+            Qt.CheckState.Checked if m in ["MAP", "SPAT"] else Qt.CheckState.Unchecked
+        )
         self.msg_list_widget.addItem(item)
     msg_box_layout.addWidget(self.msg_list_widget)
     left_layout.addWidget(msg_box)
@@ -356,12 +374,16 @@ def _create_mock_rsu_41_tab(self) -> None:
 
     self.amf_log = QTextEdit()
     self.amf_log.setReadOnly(True)
-    self.amf_log.setPlaceholderText("Broadcast updates and capture dumps will print here...")
+    self.amf_log.setPlaceholderText(
+        "Broadcast updates and capture dumps will print here..."
+    )
     right_layout.addWidget(self.amf_log)
 
     self.metrics_display = QTextEdit()
     self.metrics_display.setReadOnly(True)
-    self.metrics_display.setPlaceholderText("Metrics per message type will be reported here...")
+    self.metrics_display.setPlaceholderText(
+        "Metrics per message type will be reported here..."
+    )
     right_layout.addWidget(self.metrics_display)
 
     splitter.addWidget(right_widget)
@@ -394,7 +416,9 @@ def _create_mock_rsu_41_tab(self) -> None:
             lambda port: log(f"Fake RSU listening on loopback port {port}")
         )
         task.signals.received.connect(
-            lambda data, ip, port: log(f"Fake RSU Received {len(data)} B from {ip}:{port}")
+            lambda data, ip, port: log(
+                f"Fake RSU Received {len(data)} B from {ip}:{port}"
+            )
         )
         self._fake_rsu_task = task
         QThreadPool.globalInstance().start(task)
@@ -423,7 +447,9 @@ def _create_mock_rsu_41_tab(self) -> None:
                 selected_msgs.append(item.text())
 
         if not selected_msgs:
-            QMessageBox.warning(self, "No Message Selected", "Please select at least one message type.")
+            QMessageBox.warning(
+                self, "No Message Selected", "Please select at least one message type."
+            )
             return
 
         self._broadcast_thread = _BroadcastWorker(
@@ -434,7 +460,7 @@ def _create_mock_rsu_41_tab(self) -> None:
             period_sec=self.period_spin.value(),
             psid=self.psid_edit.text(),
             payload_hex=self.payload_edit.text(),
-            security=self.security_edit.text(),
+            security=self.security_edit.isChecked(),
             is_signed=self.chk_is_signed.isChecked(),
             rsu_sign=self.chk_rsu_sign.isChecked(),
             dump_filepath=self.dump_file_edit.text(),
@@ -442,7 +468,9 @@ def _create_mock_rsu_41_tab(self) -> None:
 
         self._broadcast_thread.signals.log.connect(log)
         self._broadcast_thread.signals.metrics_updated.connect(update_metrics)
-        self._broadcast_thread.signals.finished.connect(lambda: send_btn.setText("Start Automated Broadcast"))
+        self._broadcast_thread.signals.finished.connect(
+            lambda: send_btn.setText("Start Automated Broadcast")
+        )
 
         self._broadcast_thread.start()
         send_btn.setText("Stop Broadcast")
