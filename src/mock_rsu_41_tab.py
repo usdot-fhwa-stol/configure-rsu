@@ -1,12 +1,11 @@
 import datetime
-import os
 import shutil
 import socket
 import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Optional
 
 from PyQt6.QtCore import (
     QObject,
@@ -81,28 +80,20 @@ def _normalise_hex(value: str) -> str:
     return value.strip().replace(" ", "").upper()
 
 
-def _parse_amf(data: bytes) -> Dict[str, str]:
-    """
-    Parse the text AMF representation used by the existing active-message tab.
-
-    This validates transport-format fields only. Payload semantic validation,
-    such as J2735 ASN.1 decoding, is out of scope for the mock listener.
-    """
+def _parse_amf(data: bytes) -> dict[str, str]:
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise ValueError("AMF data is not UTF-8 text") from exc
 
-    fields: Dict[str, str] = {}
+    fields: dict[str, str] = {}
 
     for raw_line in text.splitlines():
         line = raw_line.strip()
-
         if not line:
             continue
 
         key, separator, value = line.partition("=")
-
         if not separator or not key.strip():
             raise ValueError(f"Malformed AMF line: {raw_line!r}")
 
@@ -125,7 +116,6 @@ def _parse_amf(data: bytes) -> Dict[str, str]:
     }
 
     missing = sorted(required_fields.difference(fields))
-
     if missing:
         raise ValueError(f"Missing AMF fields: {', '.join(missing)}")
 
@@ -176,11 +166,6 @@ def _parse_amf(data: bytes) -> Dict[str, str]:
 
 
 class _PacketCapture:
-    """
-    Manages a real PCAP process using dumpcap when available, falling back to
-    tcpdump. The process captures UDP traffic for the configured RSU port.
-    """
-
     def __init__(self, interface: str, udp_port: int, output_path: Path):
         self.interface = interface
         self.udp_port = udp_port
@@ -233,13 +218,8 @@ class _PacketCapture:
         time.sleep(0.4)
 
         if self.process.poll() is not None:
-            stderr = ""
-
-            if self.process.stderr is not None:
-                stderr = self.process.stderr.read().strip()
-
+            stderr = self.process.stderr.read().strip() if self.process.stderr else ""
             self.process = None
-
             raise RuntimeError(
                 "PCAP capture did not start. "
                 f"{stderr or 'Check capture permissions and interface name.'}"
@@ -251,7 +231,6 @@ class _PacketCapture:
 
         if self.process.poll() is None:
             self.process.terminate()
-
             try:
                 self.process.wait(timeout=5)
             except subprocess.TimeoutExpired:
@@ -270,15 +249,6 @@ class _FakeRsuListenerSignals(QObject):
 
 
 class _FakeRsuListenerTask(QRunnable):
-    """
-    UDP fake RSU listener.
-
-    It accepts the existing text AMF format, validates the fields, and sends a
-    mock acknowledgement back to the sending socket.
-
-    The ACK protocol is local-test-only and is not an RSU 4.1 wire protocol.
-    """
-
     def __init__(self, bind_ip: str, bind_port: int):
         super().__init__()
         self.bind_ip = bind_ip
@@ -289,7 +259,6 @@ class _FakeRsuListenerTask(QRunnable):
 
     def stop(self) -> None:
         self._stop_requested = True
-
         if self._socket is not None:
             try:
                 self._socket.close()
@@ -330,25 +299,16 @@ class _FakeRsuListenerTask(QRunnable):
                     ).encode("utf-8")
 
                     self._socket.sendto(acknowledgement, address)
-
                     self.signals.received.emit(
-                        message_type,
-                        sequence,
-                        sender_ip,
-                        sender_port,
+                        message_type, sequence, sender_ip, sender_port
                     )
                 except (OSError, ValueError) as exc:
                     reason = str(exc)
-
                     try:
                         rejection = (
-                            "ACK\n"
-                            "Type=UNKNOWN\n"
-                            "Sequence=-1\n"
-                            "Status=ERROR\n"
+                            "ACK\nType=UNKNOWN\nSequence=-1\nStatus=ERROR\n"
                             f"Reason={reason}\n"
                         ).encode("utf-8")
-
                         self._socket.sendto(rejection, address)
                     except OSError:
                         pass
@@ -360,7 +320,6 @@ class _FakeRsuListenerTask(QRunnable):
                     self._socket.close()
                 except OSError:
                     pass
-
             self._socket = None
             self.signals.stopped.emit()
 
@@ -375,31 +334,18 @@ class _BroadcastWorkerSignals(QObject):
 
 
 class _BroadcastWorker(QThread):
-    """
-    Sends each selected AMF type for the configured period.
-
-    In fake mode, waits for matching UDP ACK messages from the mock listener
-    and calculates round-trip latency. In real mode, ACKs are optional:
-    a non-ACKing real RSU produces no latency/drop measurement.
-    """
-
     def __init__(
         self,
         target_ip: str,
         target_port: int,
-        selected_messages: List[str],
+        selected_messages: list[str],
         frequency_hz: float,
         period_seconds: int,
         psid: str,
         payload_hex: str,
-        priority: int,
-        tx_mode: str,
-        tx_channel: int,
-        tx_interval: int,
         signature: bool,
         encryption: bool,
         use_fake_rsu: bool,
-        ack_timeout_seconds: float,
         capture_enabled: bool,
         capture_interface: str,
         pcap_path: Path,
@@ -412,14 +358,14 @@ class _BroadcastWorker(QThread):
         self.period_seconds = period_seconds
         self.psid = psid
         self.payload_hex = payload_hex
-        self.priority = priority
-        self.tx_mode = tx_mode
-        self.tx_channel = tx_channel
-        self.tx_interval = tx_interval
+        self.prio = 7
+        self.tx_mode = "CONT"
+        self.tx_channel = 172
+        self.tx_interval = 0
         self.signature = signature
         self.encryption = encryption
-        self.use_fake_rsu = use_fake_rsu
-        self.ack_timeout_seconds = ack_timeout_seconds
+        self.use_no_rsu = use_fake_rsu
+        self.ack_timeout_seconds = 0.1
         self.capture_enabled = capture_enabled
         self.capture_interface = capture_interface
         self.pcap_path = pcap_path
@@ -430,7 +376,7 @@ class _BroadcastWorker(QThread):
         self._stop_requested = True
 
     @staticmethod
-    def _parse_ack(data: bytes) -> Dict[str, str]:
+    def _parse_ack(data: bytes) -> dict[str, str]:
         try:
             text = data.decode("utf-8")
         except UnicodeDecodeError as exc:
@@ -441,11 +387,9 @@ class _BroadcastWorker(QThread):
         if not lines or lines[0] != "ACK":
             raise ValueError("Received non-ACK UDP payload")
 
-        fields: Dict[str, str] = {}
-
+        fields: dict[str, str] = {}
         for line in lines[1:]:
             key, separator, value = line.partition("=")
-
             if separator:
                 fields[key.strip()] = value.strip()
 
@@ -460,7 +404,7 @@ class _BroadcastWorker(QThread):
             f"Type={message_type}\n"
             f"Sequence={sequence}\n"
             f"PSID={self.psid}\n"
-            f"Priority={self.priority}\n"
+            f"Priority={self.prio}\n"
             f"TxMode={self.tx_mode}\n"
             f"TxChannel={self.tx_channel}\n"
             f"TxInterval={self.tx_interval}\n"
@@ -476,17 +420,11 @@ class _BroadcastWorker(QThread):
         self,
         sock: socket.socket,
         expected_sequence: int,
-    ) -> Tuple[Optional[float], Optional[str]]:
-        """
-        Returns (latency_ms, error_type).
-
-        A None error means a matching successful ACK was received.
-        """
+    ) -> tuple[Optional[float], Optional[str]]:
         deadline = time.monotonic() + self.ack_timeout_seconds
 
         while not self._stop_requested:
             remaining = deadline - time.monotonic()
-
             if remaining <= 0:
                 return None, "AckTimeout"
 
@@ -540,16 +478,10 @@ class _BroadcastWorker(QThread):
                 f"at {self.frequency_hz:.2f} Hz."
             )
 
-            if self.use_fake_rsu:
-                self.signals.log.emit(
-                    "Fake RSU acknowledgements are enabled; "
-                    "latency and dropped-message metrics are active."
-                )
+            if self.use_no_rsu:
+                self.signals.log.emit("No RSU selected mode.")
             else:
-                self.signals.log.emit(
-                    "Real RSU mode is selected. Latency and dropped-message "
-                    "metrics require a compatible UDP acknowledgement."
-                )
+                self.signals.log.emit("Real RSU mode is selected.")
 
             global_sequence = 1
 
@@ -557,12 +489,9 @@ class _BroadcastWorker(QThread):
                 if self._stop_requested:
                     break
 
-                attempted_count = 0
-                sent_count = 0
-                dropped_count = 0
-                total_bytes_sent = 0
-                latencies_ms: List[float] = []
-                error_types: Dict[str, int] = {}
+                attempted_count = sent_count = dropped_count = total_bytes_sent = 0
+                latencies_ms: list[float] = []
+                error_types: dict[str, int] = {}
 
                 message_start = time.monotonic()
                 message_end = message_start + self.period_seconds
@@ -594,16 +523,14 @@ class _BroadcastWorker(QThread):
                         error_name = type(exc).__name__
                         error_types[error_name] = error_types.get(error_name, 0) + 1
                         self.signals.log.emit(
-                            f"[{message_type}] send error for sequence "
-                            f"{sequence}: {exc}"
+                            f"[{message_type}] send error for sequence {sequence}: {exc}"
                         )
                         next_send += interval_seconds
                         continue
 
-                    if self.use_fake_rsu:
+                    if self.use_no_rsu:
                         ack_time, ack_error = self._wait_for_matching_ack(
-                            sock,
-                            sequence,
+                            sock, sequence
                         )
 
                         if ack_error is None and ack_time is not None:
@@ -630,7 +557,6 @@ class _BroadcastWorker(QThread):
                     "total_bytes_sent": total_bytes_sent,
                     "throughput_kbps": throughput_kbps,
                     "average_latency_ms": average_latency,
-                    "ack_count": len(latencies_ms),
                     "error_types": error_types,
                     "elapsed_seconds": elapsed_seconds,
                 }
@@ -655,7 +581,6 @@ class _BroadcastWorker(QThread):
                 try:
                     capture.stop()
                     self.signals.pcap_finished.emit(str(self.pcap_path))
-                    self.signals.log.emit(f"PCAP saved: {self.pcap_path}")
                 except Exception as exc:
                     self.signals.error.emit(f"Could not stop PCAP capture: {exc}")
 
@@ -684,6 +609,18 @@ class MockRsuApp(QMainWindow):
         self._stop_fake_listener()
         event.accept()
 
+    def _on_target_mode_changed(self, selected_mode: str) -> None:
+        if selected_mode == "Using RSU":
+            self.amf_rsu_edit.setText("192.168.55.20")
+            self.prio = 3
+            self.tx_channel = 183
+            self.capture_interface_edit.setText("eth0")
+        else:
+            self.amf_rsu_edit.setText("127.0.0.1")
+            self.prio = 7
+            self.tx_channel = 172
+            self.capture_interface_edit.setText("lo")
+
     def _create_mock_rsu_41_tab(self) -> None:
         tab = QWidget()
         main_layout = QVBoxLayout(tab)
@@ -701,15 +638,10 @@ class MockRsuApp(QMainWindow):
         left_layout.addLayout(form)
 
         self.target_mode_combo = QComboBox()
-        self.target_mode_combo.addItems(
-            [
-                "Fake RSU (local loopback)",
-                "Real RSU",
-            ]
-        )
+        self.target_mode_combo.addItems(["No RSU", "Using RSU"])
         form.addRow("Target Mode:", self.target_mode_combo)
 
-        self.amf_rsu_edit = QLineEdit("127.0.0.1")
+        self.amf_rsu_edit = QLineEdit("")
         form.addRow("RSU IP Address:", self.amf_rsu_edit)
 
         self.amf_port_spin = _make_spinbox(1516, 1, 65535)
@@ -724,35 +656,11 @@ class MockRsuApp(QMainWindow):
 
         self.period_spin = _make_spinbox(60, 1, 3600)
         self.period_spin.setSuffix(" sec")
-        form.addRow("Period per Message:", self.period_spin)
-
-        self.ack_timeout_spin = QDoubleSpinBox()
-        self.ack_timeout_spin.setRange(0.01, 10.0)
-        self.ack_timeout_spin.setDecimals(2)
-        self.ack_timeout_spin.setValue(0.50)
-        self.ack_timeout_spin.setSuffix(" sec")
-        form.addRow("Fake ACK Timeout:", self.ack_timeout_spin)
+        form.addRow("Period:", self.period_spin)
 
         self.psid_edit = _make_hex_edit("8002")
         self.psid_edit.setPlaceholderText("Example: 8002")
         form.addRow("PSID:", self.psid_edit)
-
-        self.priority_spin = _make_spinbox(3, 0, 7)
-        self.priority_spin.setValue(7)
-        form.addRow("Priority:", self.priority_spin)
-
-        self.tx_mode_combo = QComboBox()
-        self.tx_mode_combo.addItems(["CONT", "ALT"])
-        self.tx_mode_combo.setCurrentText("CONT")
-        form.addRow("Tx Mode:", self.tx_mode_combo)
-
-        self.tx_channel_spin = _make_spinbox(183, 1, 255, readonly=True)
-        self.tx_channel_spin.setValue(172)
-        form.addRow("Tx Channel:", self.tx_channel_spin)
-
-        self.tx_interval_spin = _make_spinbox(0, 0, 1_000_000, readonly=True)
-        self.tx_interval_spin.setValue(0)
-        form.addRow("Tx Interval:", self.tx_interval_spin)
 
         self.signature_check = QCheckBox()
         form.addRow("Signature:", self.signature_check)
@@ -762,12 +670,8 @@ class MockRsuApp(QMainWindow):
 
         self.payload_dict_combo = QComboBox()
         self.payload_dict_combo.addItems(sorted(PAYLOAD_DICT.keys()))
-        form.addRow("Payload Preset:", self.payload_dict_combo)
 
-        initial_payload = PAYLOAD_DICT.get(
-            self.payload_dict_combo.currentText(),
-            "",
-        )
+        initial_payload = PAYLOAD_DICT.get(self.payload_dict_combo.currentText(), "")
         self.payload_edit = _make_hex_edit(initial_payload)
         self.payload_edit.setPlaceholderText("Hex payload bytes")
         form.addRow("Message Payload:", self.payload_edit)
@@ -797,7 +701,6 @@ class MockRsuApp(QMainWindow):
         message_layout = QVBoxLayout(message_group)
 
         self.msg_list_widget = QListWidget()
-
         for message_type in ["MAP", "SPAT", "BSM", "SDSM"]:
             item = QListWidgetItem(message_type)
             item.setCheckState(
@@ -816,19 +719,18 @@ class MockRsuApp(QMainWindow):
         right_layout = QVBoxLayout(right_widget)
         right_layout.setContentsMargins(0, 0, 0, 0)
 
-        log_group = QGroupBox("Broadcast and Fake RSU Log")
+        log_group = QGroupBox("Logs")
+        log_group.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         log_layout = QVBoxLayout(log_group)
 
         self.amf_log = QTextEdit()
         self.amf_log.setReadOnly(True)
-        self.amf_log.setPlaceholderText(
-            "Broadcast status, Fake RSU validation, and PCAP events appear here."
-        )
         log_layout.addWidget(self.amf_log)
 
         right_layout.addWidget(log_group, 1)
 
-        metric_group = QGroupBox("Per-Message Metrics")
+        metric_group = QGroupBox("Metrics")
+        metric_group.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         metric_layout = QVBoxLayout(metric_group)
 
         self.metrics_display = QTextEdit()
@@ -860,7 +762,7 @@ class MockRsuApp(QMainWindow):
         self.target_mode_combo.currentTextChanged.connect(self._on_target_mode_changed)
         self._on_target_mode_changed(self.target_mode_combo.currentText())
 
-        self.tabs.addTab(tab, "Send Active Message (RSU 4.1)")
+        self.tabs.addTab(tab, "RSU 4.1 Mock Messages")
 
     def _log(self, message: str) -> None:
         timestamp = datetime.datetime.now().strftime("%H:%M:%S")
@@ -869,18 +771,6 @@ class MockRsuApp(QMainWindow):
     def _clear_output(self) -> None:
         self.amf_log.clear()
         self.metrics_display.clear()
-
-    def _on_target_mode_changed(self, selected_mode: str) -> None:
-        is_fake = selected_mode.startswith("Fake")
-
-        if is_fake:
-            self.amf_rsu_edit.setText("127.0.0.1")
-            self.amf_rsu_edit.setReadOnly(True)
-            self.capture_interface_edit.setText("lo")
-            self.ack_timeout_spin.setEnabled(True)
-        else:
-            self.amf_rsu_edit.setReadOnly(False)
-            self.ack_timeout_spin.setEnabled(False)
 
     def _start_fake_listener(self) -> bool:
         if self._fake_rsu_task is not None:
@@ -896,8 +786,7 @@ class MockRsuApp(QMainWindow):
         )
         task.signals.received.connect(
             lambda message_type, sequence, ip, port: self._log(
-                f"Fake RSU accepted {message_type} sequence {sequence} "
-                f"from {ip}:{port}."
+                f"Fake RSU accepted {message_type} sequence {sequence} from {ip}:{port}."
             )
         )
         task.signals.rejected.connect(
@@ -919,15 +808,12 @@ class MockRsuApp(QMainWindow):
             self._fake_rsu_task.stop()
             self._fake_rsu_task = None
 
-    def _selected_message_types(self) -> List[str]:
-        selected: List[str] = []
-
+    def _selected_message_types(self) -> list[str]:
+        selected: list[str] = []
         for index in range(self.msg_list_widget.count()):
             item = self.msg_list_widget.item(index)
-
             if item.checkState() == Qt.CheckState.Checked:
                 selected.append(item.text())
-
         return selected
 
     def _validate_input(self) -> Optional[str]:
@@ -954,7 +840,6 @@ class MockRsuApp(QMainWindow):
 
         if self.capture_enabled_check.isChecked():
             interface = self.capture_interface_edit.text().strip()
-
             if not interface:
                 return "Enter a PCAP capture interface or disable packet capture."
 
@@ -968,7 +853,6 @@ class MockRsuApp(QMainWindow):
             return
 
         validation_error = self._validate_input()
-
         if validation_error is not None:
             QMessageBox.warning(self, "Validation Error", validation_error)
             return
@@ -996,14 +880,9 @@ class MockRsuApp(QMainWindow):
             period_seconds=self.period_spin.value(),
             psid=_normalise_hex(self.psid_edit.text()),
             payload_hex=_normalise_hex(self.payload_edit.text()),
-            priority=self.priority_spin.value(),
-            tx_mode=self.tx_mode_combo.currentText(),
-            tx_channel=self.tx_channel_spin.value(),
-            tx_interval=self.tx_interval_spin.value(),
             signature=self.signature_check.isChecked(),
             encryption=self.encryption_check.isChecked(),
             use_fake_rsu=is_fake,
-            ack_timeout_seconds=self.ack_timeout_spin.value(),
             capture_enabled=self.capture_enabled_check.isChecked(),
             capture_interface=self.capture_interface_edit.text().strip(),
             pcap_path=pcap_path,
@@ -1035,21 +914,21 @@ class MockRsuApp(QMainWindow):
 
     def _update_metrics(self, message_type: str, metrics: dict) -> None:
         latency = metrics["average_latency_ms"]
-
-        if latency is None:
-            latency_text = "N/A (no matching acknowledgements)"
-        else:
-            latency_text = f"{latency:.3f} ms"
+        latency_text = (
+            f"{latency:.3f} ms"
+            if latency is not None
+            else "N/A"
+        )
 
         errors = metrics["error_types"]
-
-        if not errors:
-            errors_text = "None"
-        else:
-            errors_text = "\n".join(
+        errors_text = (
+            "None"
+            if not errors
+            else "\n".join(
                 f"  {error_type}: {count}"
                 for error_type, count in sorted(errors.items())
             )
+        )
 
         text = (
             f"=== Metrics for [{message_type}] ===\n"
@@ -1058,7 +937,6 @@ class MockRsuApp(QMainWindow):
             f"Total Bytes Sent  : {metrics['total_bytes_sent']} bytes\n"
             f"Total Messages Sent: {metrics['total_messages_sent']}\n"
             f"Messages Dropped  : {metrics['messages_dropped']}\n"
-            f"ACKs Received     : {metrics['ack_count']}\n"
             f"Elapsed Time      : {metrics['elapsed_seconds']:.2f} sec\n"
             f"Error Type Counts :\n{errors_text}\n"
             f"{'-' * 48}"
