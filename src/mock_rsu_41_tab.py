@@ -1,3 +1,11 @@
+"""Mock RSU 4.1 broadcast simulator.
+
+A PyQt6 GUI that broadcasts AMF-formatted messages (MAP/SPAT/BSM/SDSM) over
+UDP at a configurable rate, optionally against a built-in listener for
+No RSU mode (useful when no real roadside unit is available), with
+optional tcpdump packet capture and live throughput metrics.
+"""
+
 import datetime
 import shutil
 import socket
@@ -5,7 +13,6 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Optional
 
 from PyQt6.QtCore import (
     QObject,
@@ -50,6 +57,7 @@ PCAP_DIRECTORY = REPO_ROOT / "pcaps"
 
 
 def _hex_validator() -> QRegularExpressionValidator:
+    """Return a validator that only accepts hex digit characters."""
     return QRegularExpressionValidator(HEX_REGEX)
 
 
@@ -59,6 +67,7 @@ def _make_spinbox(
     maximum: int,
     readonly: bool = False,
 ) -> QSpinBox:
+    """Create a QSpinBox with the given range/value, optionally read-only."""
     spinbox = QSpinBox()
     spinbox.setRange(minimum, maximum)
     spinbox.setValue(value)
@@ -71,16 +80,23 @@ def _make_spinbox(
 
 
 def _make_hex_edit(value: str = "") -> QLineEdit:
+    """Create a QLineEdit restricted to hex-digit input."""
     line_edit = QLineEdit(value)
     line_edit.setValidator(_hex_validator())
     return line_edit
 
 
 def _normalise_hex(value: str) -> str:
+    """Strip whitespace/spaces and uppercase a hex string for consistency."""
     return value.strip().replace(" ", "").upper()
 
 
 def _parse_amf(data: bytes) -> dict[str, str]:
+    """Parse a raw AMF message into a field dict, validating required
+    fields, enumerations, integer fields, and hex-encoded PSID/Payload.
+
+    Raises ValueError with a descriptive message on any malformed input.
+    """
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError as exc:
@@ -102,7 +118,6 @@ def _parse_amf(data: bytes) -> dict[str, str]:
     required_fields = {
         "Version",
         "Type",
-        "Sequence",
         "PSID",
         "Priority",
         "TxMode",
@@ -135,13 +150,12 @@ def _parse_amf(data: bytes) -> dict[str, str]:
         raise ValueError("Encryption must be True or False")
 
     try:
-        int(fields["Sequence"])
         int(fields["Priority"])
         int(fields["TxChannel"])
         int(fields["TxInterval"])
     except ValueError as exc:
         raise ValueError(
-            "Sequence, Priority, TxChannel, or TxInterval is invalid"
+            "Priority, TxChannel, or TxInterval is invalid"
         ) from exc
 
     psid = _normalise_hex(fields["PSID"])
@@ -166,32 +180,25 @@ def _parse_amf(data: bytes) -> dict[str, str]:
 
 
 class _PacketCapture:
+    """Wraps a `tcpdump` subprocess to capture UDP traffic on a port to a
+    .pcap file for the duration of a broadcast."""
+
     def __init__(self, interface: str, udp_port: int, output_path: Path):
         self.interface = interface
         self.udp_port = udp_port
         self.output_path = output_path
-        self.process: Optional[subprocess.Popen[str]] = None
+        self.process: subprocess.Popen[str] | None = None
         self.tool_name = ""
 
     def start(self) -> None:
+        """Launch tcpdump; raises RuntimeError if it's missing or exits
+        immediately (e.g. due to permissions or a bad interface name)."""
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        dumpcap = shutil.which("dumpcap")
         tcpdump = shutil.which("tcpdump")
         capture_filter = f"udp port {self.udp_port}"
 
-        if dumpcap:
-            command = [
-                dumpcap,
-                "-i",
-                self.interface,
-                "-f",
-                capture_filter,
-                "-w",
-                str(self.output_path),
-            ]
-            self.tool_name = "dumpcap"
-        elif tcpdump:
+        if tcpdump:
             command = [
                 tcpdump,
                 "-i",
@@ -203,10 +210,7 @@ class _PacketCapture:
             ]
             self.tool_name = "tcpdump"
         else:
-            raise RuntimeError(
-                "PCAP capture requires dumpcap or tcpdump in PATH. "
-                "Install Wireshark/dumpcap or tcpdump, then try again."
-            )
+            raise RuntimeError("PCAP capture requires tcpdump in PATH.")
 
         self.process = subprocess.Popen(
             command,
@@ -242,19 +246,23 @@ class _PacketCapture:
 
 class _FakeRsuListenerSignals(QObject):
     started = pyqtSignal(int)
-    received = pyqtSignal(str, int, str, int)
+    received = pyqtSignal(str, str, int)
     rejected = pyqtSignal(str, str, int)
     error = pyqtSignal(str)
     stopped = pyqtSignal()
 
 
 class _FakeRsuListenerTask(QRunnable):
+    """Background UDP listener that stands in for a real RSU: it receives
+    and validates AMF messages and logs whether each was accepted or
+    rejected, without sending any reply (fire-and-forget UDP)."""
+
     def __init__(self, bind_ip: str, bind_port: int):
         super().__init__()
         self.bind_ip = bind_ip
         self.bind_port = bind_port
         self.signals = _FakeRsuListenerSignals()
-        self._socket: Optional[socket.socket] = None
+        self._socket: socket.socket | None = None
         self._stop_requested = False
 
     def stop(self) -> None:
@@ -274,7 +282,7 @@ class _FakeRsuListenerTask(QRunnable):
             self.signals.started.emit(self.bind_port)
         except OSError as exc:
             self.signals.error.emit(
-                f"Fake RSU could not bind {self.bind_ip}:{self.bind_port}: {exc}"
+                f"No RSU could not bind {self.bind_ip}:{self.bind_port}: {exc}"
             )
             return
 
@@ -292,28 +300,9 @@ class _FakeRsuListenerTask(QRunnable):
                 try:
                     fields = _parse_amf(data)
                     message_type = fields["Type"]
-                    sequence = int(fields["Sequence"])
-
-                    acknowledgement = (
-                        f"ACK\nType={message_type}\nSequence={sequence}\nStatus=OK\n"
-                    ).encode("utf-8")
-
-                    self._socket.sendto(acknowledgement, address)
-                    self.signals.received.emit(
-                        message_type, sequence, sender_ip, sender_port
-                    )
+                    self.signals.received.emit(message_type, sender_ip, sender_port)
                 except (OSError, ValueError) as exc:
-                    reason = str(exc)
-                    try:
-                        rejection = (
-                            "ACK\nType=UNKNOWN\nSequence=-1\nStatus=ERROR\n"
-                            f"Reason={reason}\n"
-                        ).encode("utf-8")
-                        self._socket.sendto(rejection, address)
-                    except OSError:
-                        pass
-
-                    self.signals.rejected.emit(reason, sender_ip, sender_port)
+                    self.signals.rejected.emit(str(exc), sender_ip, sender_port)
         finally:
             if self._socket is not None:
                 try:
@@ -334,6 +323,11 @@ class _BroadcastWorkerSignals(QObject):
 
 
 class _BroadcastWorker(QThread):
+    """Background thread that sends AMF messages at a fixed rate for each
+    selected message type, optionally capturing packets and tracking
+    per-message send/throughput metrics.
+    """
+
     def __init__(
         self,
         target_ip: str,
@@ -345,7 +339,6 @@ class _BroadcastWorker(QThread):
         payload_hex: str,
         signature: bool,
         encryption: bool,
-        use_fake_rsu: bool,
         capture_enabled: bool,
         capture_interface: str,
         pcap_path: Path,
@@ -364,8 +357,6 @@ class _BroadcastWorker(QThread):
         self.tx_interval = 0
         self.signature = signature
         self.encryption = encryption
-        self.use_no_rsu = use_fake_rsu
-        self.ack_timeout_seconds = 0.1
         self.capture_enabled = capture_enabled
         self.capture_interface = capture_interface
         self.pcap_path = pcap_path
@@ -375,34 +366,11 @@ class _BroadcastWorker(QThread):
     def stop(self) -> None:
         self._stop_requested = True
 
-    @staticmethod
-    def _parse_ack(data: bytes) -> dict[str, str]:
-        try:
-            text = data.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise ValueError("ACK was not UTF-8 text") from exc
-
-        lines = [line.strip() for line in text.splitlines() if line.strip()]
-
-        if not lines or lines[0] != "ACK":
-            raise ValueError("Received non-ACK UDP payload")
-
-        fields: dict[str, str] = {}
-        for line in lines[1:]:
-            key, separator, value = line.partition("=")
-            if separator:
-                fields[key.strip()] = value.strip()
-
-        if "Sequence" not in fields or "Status" not in fields:
-            raise ValueError("ACK is missing Sequence or Status")
-
-        return fields
-
-    def _build_amf(self, message_type: str, sequence: int) -> bytes:
+    def _build_amf(self, message_type: str) -> bytes:
+        """Serialize one AMF message for the given message type."""
         amf = (
             "Version=0.7\n"
             f"Type={message_type}\n"
-            f"Sequence={sequence}\n"
             f"PSID={self.psid}\n"
             f"Priority={self.prio}\n"
             f"TxMode={self.tx_mode}\n"
@@ -416,46 +384,11 @@ class _BroadcastWorker(QThread):
         )
         return amf.encode("utf-8")
 
-    def _wait_for_matching_ack(
-        self,
-        sock: socket.socket,
-        expected_sequence: int,
-    ) -> tuple[Optional[float], Optional[str]]:
-        deadline = time.monotonic() + self.ack_timeout_seconds
-
-        while not self._stop_requested:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                return None, "AckTimeout"
-
-            sock.settimeout(min(remaining, 0.2))
-
-            try:
-                data, _address = sock.recvfrom(65535)
-            except socket.timeout:
-                continue
-            except OSError as exc:
-                return None, type(exc).__name__
-
-            try:
-                ack = self._parse_ack(data)
-                received_sequence = int(ack["Sequence"])
-            except (ValueError, KeyError):
-                return None, "MalformedAck"
-
-            if received_sequence != expected_sequence:
-                continue
-
-            if ack["Status"] != "OK":
-                return None, "RejectedAck"
-
-            return time.monotonic(), None
-
-        return None, "Stopped"
-
     def run(self) -> None:
-        capture: Optional[_PacketCapture] = None
-        sock: Optional[socket.socket] = None
+        """Broadcast each selected message type for `period_seconds`,
+        collect per-type metrics, and emit them as it goes."""
+        capture: _PacketCapture | None = None
+        sock: socket.socket | None = None
 
         try:
             if self.capture_enabled:
@@ -466,9 +399,6 @@ class _BroadcastWorker(QThread):
                 )
                 capture.start()
                 self.signals.pcap_started.emit(str(self.pcap_path))
-                self.signals.log.emit(
-                    f"PCAP capture started using {capture.tool_name}: {self.pcap_path}"
-                )
 
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
@@ -478,19 +408,11 @@ class _BroadcastWorker(QThread):
                 f"at {self.frequency_hz:.2f} Hz."
             )
 
-            if self.use_no_rsu:
-                self.signals.log.emit("No RSU selected mode.")
-            else:
-                self.signals.log.emit("Real RSU mode is selected.")
-
-            global_sequence = 1
-
             for message_type in self.selected_messages:
                 if self._stop_requested:
                     break
 
-                attempted_count = sent_count = dropped_count = total_bytes_sent = 0
-                latencies_ms: list[float] = []
+                attempted_count = sent_count = total_bytes_sent = 0
                 error_types: dict[str, int] = {}
 
                 message_start = time.monotonic()
@@ -509,11 +431,7 @@ class _BroadcastWorker(QThread):
                         continue
 
                     attempted_count += 1
-                    sequence = global_sequence
-                    global_sequence += 1
-                    data = self._build_amf(message_type, sequence)
-
-                    send_started = time.monotonic()
+                    data = self._build_amf(message_type)
 
                     try:
                         sock.sendto(data, (self.target_ip, self.target_port))
@@ -523,21 +441,8 @@ class _BroadcastWorker(QThread):
                         error_name = type(exc).__name__
                         error_types[error_name] = error_types.get(error_name, 0) + 1
                         self.signals.log.emit(
-                            f"[{message_type}] send error for sequence {sequence}: {exc}"
+                            f"[{message_type}] send error: {exc}"
                         )
-                        next_send += interval_seconds
-                        continue
-
-                    if self.use_no_rsu:
-                        ack_time, ack_error = self._wait_for_matching_ack(
-                            sock, sequence
-                        )
-
-                        if ack_error is None and ack_time is not None:
-                            latencies_ms.append((ack_time - send_started) * 1000.0)
-                        elif ack_error != "Stopped":
-                            dropped_count += 1
-                            error_types[ack_error] = error_types.get(ack_error, 0) + 1
 
                     next_send += interval_seconds
 
@@ -545,20 +450,14 @@ class _BroadcastWorker(QThread):
                         next_send = time.monotonic()
 
                 elapsed_seconds = max(time.monotonic() - message_start, 0.001)
-                average_latency = (
-                    sum(latencies_ms) / len(latencies_ms) if latencies_ms else None
-                )
                 throughput_kbps = (total_bytes_sent * 8.0 / 1024.0) / elapsed_seconds
 
                 metrics = {
                     "attempted_count": attempted_count,
                     "total_messages_sent": sent_count,
-                    "messages_dropped": dropped_count,
                     "total_bytes_sent": total_bytes_sent,
                     "throughput_kbps": throughput_kbps,
-                    "average_latency_ms": average_latency,
                     "error_types": error_types,
-                    "elapsed_seconds": elapsed_seconds,
                 }
 
                 self.signals.metrics_updated.emit(message_type, metrics)
@@ -566,7 +465,7 @@ class _BroadcastWorker(QThread):
             if self._stop_requested:
                 self.signals.log.emit("Broadcast stopped by user.")
             else:
-                self.signals.log.emit("Broadcast sequence complete.")
+                self.signals.log.emit("Broadcast complete.")
 
         except Exception as exc:
             self.signals.error.emit(str(exc))
@@ -588,6 +487,9 @@ class _BroadcastWorker(QThread):
 
 
 class MockRsuApp(QMainWindow):
+    """Main window: hosts the RSU 4.1 mock-broadcast tab and owns the
+    lifetime of the broadcast worker thread and No RSU listener task."""
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Mock RSU 4.1 Broadcast Simulator")
@@ -596,8 +498,8 @@ class MockRsuApp(QMainWindow):
         self.tabs = QTabWidget()
         self.setCentralWidget(self.tabs)
 
-        self._broadcast_thread: Optional[_BroadcastWorker] = None
-        self._fake_rsu_task: Optional[_FakeRsuListenerTask] = None
+        self._broadcast_thread: _BroadcastWorker | None = None
+        self._fake_rsu_task: _FakeRsuListenerTask | None = None
 
         self._create_mock_rsu_41_tab()
 
@@ -765,14 +667,17 @@ class MockRsuApp(QMainWindow):
         self.tabs.addTab(tab, "RSU 4.1 Mock Messages")
 
     def _log(self, message: str) -> None:
+        """Append a timestamped line to the log pane."""
         timestamp = datetime.datetime.now().strftime("%H:%M:%S")
         self.amf_log.append(f"[{timestamp}] {message}")
 
     def _clear_output(self) -> None:
+        """Clear the log and metrics panes."""
         self.amf_log.clear()
         self.metrics_display.clear()
 
     def _start_fake_listener(self) -> bool:
+        """Start the No RSU listener task if one isn't already running."""
         if self._fake_rsu_task is not None:
             return True
 
@@ -782,20 +687,20 @@ class MockRsuApp(QMainWindow):
         )
 
         task.signals.started.connect(
-            lambda port: self._log(f"Fake RSU listening on 127.0.0.1:{port}")
+            lambda port: self._log(f"No RSU listening on 127.0.0.1:{port}")
         )
         task.signals.received.connect(
-            lambda message_type, sequence, ip, port: self._log(
-                f"Fake RSU accepted {message_type} sequence {sequence} from {ip}:{port}."
+            lambda message_type, ip, port: self._log(
+                f"No RSU accepted {message_type} from {ip}:{port}."
             )
         )
         task.signals.rejected.connect(
             lambda reason, ip, port: self._log(
-                f"Fake RSU rejected AMF from {ip}:{port}: {reason}"
+                f"No RSU rejected AMF from {ip}:{port}: {reason}"
             )
         )
         task.signals.error.connect(self._log)
-        task.signals.stopped.connect(lambda: self._log("Fake RSU listener stopped."))
+        task.signals.stopped.connect(lambda: self._log("No RSU listener stopped."))
 
         self._fake_rsu_task = task
         QThreadPool.globalInstance().start(task)
@@ -804,11 +709,13 @@ class MockRsuApp(QMainWindow):
         return True
 
     def _stop_fake_listener(self) -> None:
+        """Stop the No RSU listener task, if one is running."""
         if self._fake_rsu_task is not None:
             self._fake_rsu_task.stop()
             self._fake_rsu_task = None
 
     def _selected_message_types(self) -> list[str]:
+        """Return the message types currently checked in the list widget."""
         selected: list[str] = []
         for index in range(self.msg_list_widget.count()):
             item = self.msg_list_widget.item(index)
@@ -816,7 +723,11 @@ class MockRsuApp(QMainWindow):
                 selected.append(item.text())
         return selected
 
-    def _validate_input(self) -> Optional[str]:
+    def _validate_input(self) -> str | None:
+        """Validate the form before starting a broadcast.
+
+        Returns an error message string if invalid, otherwise None.
+        """
         psid = _normalise_hex(self.psid_edit.text())
         payload = _normalise_hex(self.payload_edit.text())
 
@@ -846,6 +757,7 @@ class MockRsuApp(QMainWindow):
         return None
 
     def _toggle_broadcast(self) -> None:
+        """Start a new broadcast, or stop the one currently in progress."""
         if self._broadcast_thread is not None and self._broadcast_thread.isRunning():
             self._log("Stop requested.")
             self._broadcast_thread.stop()
@@ -857,13 +769,13 @@ class MockRsuApp(QMainWindow):
             QMessageBox.warning(self, "Validation Error", validation_error)
             return
 
-        is_fake = self.target_mode_combo.currentText().startswith("Fake")
+        is_fake = self.target_mode_combo.currentText().startswith("No")
 
         if is_fake and not self._start_fake_listener():
             QMessageBox.critical(
                 self,
-                "Fake RSU Error",
-                "Unable to start the fake RSU listener.",
+                "No RSU Error",
+                "Unable to start the No RSU listener.",
             )
             return
 
@@ -882,7 +794,6 @@ class MockRsuApp(QMainWindow):
             payload_hex=_normalise_hex(self.payload_edit.text()),
             signature=self.signature_check.isChecked(),
             encryption=self.encryption_check.isChecked(),
-            use_fake_rsu=is_fake,
             capture_enabled=self.capture_enabled_check.isChecked(),
             capture_interface=self.capture_interface_edit.text().strip(),
             pcap_path=pcap_path,
@@ -891,9 +802,6 @@ class MockRsuApp(QMainWindow):
         self._broadcast_thread.signals.log.connect(self._log)
         self._broadcast_thread.signals.error.connect(self._on_broadcast_error)
         self._broadcast_thread.signals.metrics_updated.connect(self._update_metrics)
-        self._broadcast_thread.signals.pcap_started.connect(
-            lambda path: self._log(f"Capturing UDP traffic to: {path}")
-        )
         self._broadcast_thread.signals.pcap_finished.connect(
             lambda path: self._log(f"Capture complete: {path}")
         )
@@ -913,13 +821,7 @@ class MockRsuApp(QMainWindow):
         self._broadcast_thread = None
 
     def _update_metrics(self, message_type: str, metrics: dict) -> None:
-        latency = metrics["average_latency_ms"]
-        latency_text = (
-            f"{latency:.3f} ms"
-            if latency is not None
-            else "N/A"
-        )
-
+        """Format and append one message type's metrics to the metrics pane."""
         errors = metrics["error_types"]
         errors_text = (
             "None"
@@ -932,12 +834,9 @@ class MockRsuApp(QMainWindow):
 
         text = (
             f"=== Metrics for [{message_type}] ===\n"
-            f"Latency (average) : {latency_text}\n"
             f"Throughput        : {metrics['throughput_kbps']:.2f} kbps\n"
             f"Total Bytes Sent  : {metrics['total_bytes_sent']} bytes\n"
             f"Total Messages Sent: {metrics['total_messages_sent']}\n"
-            f"Messages Dropped  : {metrics['messages_dropped']}\n"
-            f"Elapsed Time      : {metrics['elapsed_seconds']:.2f} sec\n"
             f"Error Type Counts :\n{errors_text}\n"
             f"{'-' * 48}"
         )
@@ -946,6 +845,7 @@ class MockRsuApp(QMainWindow):
 
 
 def main() -> None:
+    """Launch the Mock RSU 4.1 GUI."""
     app = QApplication(sys.argv)
     window = MockRsuApp()
     window.show()
