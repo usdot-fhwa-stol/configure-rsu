@@ -57,7 +57,6 @@ PCAP_DIRECTORY = REPO_ROOT / "pcaps"
 
 
 def _hex_validator() -> QRegularExpressionValidator:
-    """Return a validator that only accepts hex digit characters."""
     return QRegularExpressionValidator(HEX_REGEX)
 
 
@@ -67,7 +66,6 @@ def _make_spinbox(
     maximum: int,
     readonly: bool = False,
 ) -> QSpinBox:
-    """Create a QSpinBox with the given range/value, optionally read-only."""
     spinbox = QSpinBox()
     spinbox.setRange(minimum, maximum)
     spinbox.setValue(value)
@@ -80,23 +78,16 @@ def _make_spinbox(
 
 
 def _make_hex_edit(value: str = "") -> QLineEdit:
-    """Create a QLineEdit restricted to hex-digit input."""
     line_edit = QLineEdit(value)
     line_edit.setValidator(_hex_validator())
     return line_edit
 
 
 def _normalise_hex(value: str) -> str:
-    """Strip whitespace/spaces and uppercase a hex string for consistency."""
     return value.strip().replace(" ", "").upper()
 
 
 def _parse_amf(data: bytes) -> dict[str, str]:
-    """Parse a raw AMF message into a field dict, validating required
-    fields, enumerations, integer fields, and hex-encoded PSID/Payload.
-
-    Raises ValueError with a descriptive message on any malformed input.
-    """
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError as exc:
@@ -180,9 +171,6 @@ def _parse_amf(data: bytes) -> dict[str, str]:
 
 
 class _PacketCapture:
-    """Wraps a `tcpdump` subprocess to capture UDP traffic on a port to a
-    .pcap file for the duration of a broadcast."""
-
     def __init__(self, interface: str, udp_port: int, output_path: Path):
         self.interface = interface
         self.udp_port = udp_port
@@ -191,8 +179,6 @@ class _PacketCapture:
         self.tool_name = ""
 
     def start(self) -> None:
-        """Launch tcpdump; raises RuntimeError if it's missing or exits
-        immediately (e.g. due to permissions or a bad interface name)."""
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
 
         tcpdump = shutil.which("tcpdump")
@@ -244,7 +230,7 @@ class _PacketCapture:
         self.process = None
 
 
-class _FakeRsuListenerSignals(QObject):
+class _NoRsuListenerSignals(QObject):
     started = pyqtSignal(int)
     received = pyqtSignal(str, str, int)
     rejected = pyqtSignal(str, str, int)
@@ -252,16 +238,12 @@ class _FakeRsuListenerSignals(QObject):
     stopped = pyqtSignal()
 
 
-class _FakeRsuListenerTask(QRunnable):
-    """Background UDP listener that stands in for a real RSU: it receives
-    and validates AMF messages and logs whether each was accepted or
-    rejected, without sending any reply (fire-and-forget UDP)."""
-
+class _NoRsuListenerTask(QRunnable):
     def __init__(self, bind_ip: str, bind_port: int):
         super().__init__()
         self.bind_ip = bind_ip
         self.bind_port = bind_port
-        self.signals = _FakeRsuListenerSignals()
+        self.signals = _NoRsuListenerSignals()
         self._socket: socket.socket | None = None
         self._stop_requested = False
 
@@ -323,10 +305,6 @@ class _BroadcastWorkerSignals(QObject):
 
 
 class _BroadcastWorker(QThread):
-    """Background thread that sends AMF messages at a fixed rate for each
-    selected message type, optionally capturing packets and tracking
-    per-message send/throughput metrics.
-    """
 
     def __init__(
         self,
@@ -367,7 +345,6 @@ class _BroadcastWorker(QThread):
         self._stop_requested = True
 
     def _build_amf(self, message_type: str) -> bytes:
-        """Serialize one AMF message for the given message type."""
         amf = (
             "Version=0.7\n"
             f"Type={message_type}\n"
@@ -385,8 +362,6 @@ class _BroadcastWorker(QThread):
         return amf.encode("utf-8")
 
     def run(self) -> None:
-        """Broadcast each selected message type for `period_seconds`,
-        collect per-type metrics, and emit them as it goes."""
         capture: _PacketCapture | None = None
         sock: socket.socket | None = None
 
@@ -487,9 +462,6 @@ class _BroadcastWorker(QThread):
 
 
 class MockRsuApp(QMainWindow):
-    """Main window: hosts the RSU 4.1 mock-broadcast tab and owns the
-    lifetime of the broadcast worker thread and No RSU listener task."""
-
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Mock RSU 4.1 Broadcast Simulator")
@@ -499,7 +471,7 @@ class MockRsuApp(QMainWindow):
         self.setCentralWidget(self.tabs)
 
         self._broadcast_thread: _BroadcastWorker | None = None
-        self._fake_rsu_task: _FakeRsuListenerTask | None = None
+        self._no_rsu_task: _NoRsuListenerTask | None = None
 
         self._create_mock_rsu_41_tab()
 
@@ -508,7 +480,7 @@ class MockRsuApp(QMainWindow):
             self._broadcast_thread.stop()
             self._broadcast_thread.wait(3000)
 
-        self._stop_fake_listener()
+        self._stop_no_listener()
         event.accept()
 
     def _on_target_mode_changed(self, selected_mode: str) -> None:
@@ -667,21 +639,18 @@ class MockRsuApp(QMainWindow):
         self.tabs.addTab(tab, "RSU 4.1 Mock Messages")
 
     def _log(self, message: str) -> None:
-        """Append a timestamped line to the log pane."""
         timestamp = datetime.datetime.now().strftime("%H:%M:%S")
         self.amf_log.append(f"[{timestamp}] {message}")
 
     def _clear_output(self) -> None:
-        """Clear the log and metrics panes."""
         self.amf_log.clear()
         self.metrics_display.clear()
 
-    def _start_fake_listener(self) -> bool:
-        """Start the No RSU listener task if one isn't already running."""
-        if self._fake_rsu_task is not None:
+    def _start_no_listener(self) -> bool:
+        if self._no_rsu_task is not None:
             return True
 
-        task = _FakeRsuListenerTask(
+        task = _NoRsuListenerTask(
             bind_ip="127.0.0.1",
             bind_port=self.amf_port_spin.value(),
         )
@@ -702,20 +671,18 @@ class MockRsuApp(QMainWindow):
         task.signals.error.connect(self._log)
         task.signals.stopped.connect(lambda: self._log("No RSU listener stopped."))
 
-        self._fake_rsu_task = task
+        self._no_rsu_task = task
         QThreadPool.globalInstance().start(task)
         time.sleep(0.1)
 
         return True
 
-    def _stop_fake_listener(self) -> None:
-        """Stop the No RSU listener task, if one is running."""
-        if self._fake_rsu_task is not None:
-            self._fake_rsu_task.stop()
-            self._fake_rsu_task = None
+    def _stop_no_listener(self) -> None:
+        if self._no_rsu_task is not None:
+            self._no_rsu_task.stop()
+            self._no_rsu_task = None
 
     def _selected_message_types(self) -> list[str]:
-        """Return the message types currently checked in the list widget."""
         selected: list[str] = []
         for index in range(self.msg_list_widget.count()):
             item = self.msg_list_widget.item(index)
@@ -724,10 +691,6 @@ class MockRsuApp(QMainWindow):
         return selected
 
     def _validate_input(self) -> str | None:
-        """Validate the form before starting a broadcast.
-
-        Returns an error message string if invalid, otherwise None.
-        """
         psid = _normalise_hex(self.psid_edit.text())
         payload = _normalise_hex(self.payload_edit.text())
 
@@ -757,7 +720,6 @@ class MockRsuApp(QMainWindow):
         return None
 
     def _toggle_broadcast(self) -> None:
-        """Start a new broadcast, or stop the one currently in progress."""
         if self._broadcast_thread is not None and self._broadcast_thread.isRunning():
             self._log("Stop requested.")
             self._broadcast_thread.stop()
@@ -769,9 +731,9 @@ class MockRsuApp(QMainWindow):
             QMessageBox.warning(self, "Validation Error", validation_error)
             return
 
-        is_fake = self.target_mode_combo.currentText().startswith("No")
+        is_no = self.target_mode_combo.currentText().startswith("No")
 
-        if is_fake and not self._start_fake_listener():
+        if is_no and not self._start_no_listener():
             QMessageBox.critical(
                 self,
                 "No RSU Error",
