@@ -28,8 +28,8 @@ class _BroadcastWorker(QThread):
         payload_hex: str,
         signature: bool,
         encryption: bool,
-        capture_enabled: bool,
-        capture_interface: str,
+        recording_enabled: bool,
+        recording_interface: str,
         pcap_path: Path,
     ):
         super().__init__()
@@ -46,8 +46,8 @@ class _BroadcastWorker(QThread):
         self.tx_interval = 0
         self.signature = signature
         self.encryption = encryption
-        self.capture_enabled = capture_enabled
-        self.capture_interface = capture_interface
+        self.recording_enabled = recording_enabled
+        self.recording_interface = recording_interface
         self.pcap_path = pcap_path
         self.signals = _BroadcastWorkerSignals()
         self._stop_requested = False
@@ -73,17 +73,17 @@ class _BroadcastWorker(QThread):
         return amf.encode("utf-8")
 
     def run(self) -> None:
-        capture: Recorder | None = None
+        recorder: Recorder | None = None
         sock: socket.socket | None = None
 
         try:
-            if self.capture_enabled:
-                capture = Recorder(
-                    interface=self.capture_interface,
+            if self.recording_enabled:
+                recorder = Recorder(
+                    interface=self.recording_interface,
                     udp_port=self.target_port,
                     output_path=self.pcap_path,
                 )
-                capture.start()
+                recorder.start()
                 self.signals.pcap_started.emit(str(self.pcap_path))
 
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -160,11 +160,11 @@ class _BroadcastWorker(QThread):
                 except OSError:
                     pass
 
-            if capture is not None:
+            if recorder is not None:
                 try:
-                    capture.stop()
+                    recorder.stop()
                     self.signals.pcap_finished.emit(str(self.pcap_path))
                 except Exception as exc:
-                    self.signals.error.emit(f"Could not stop PCAP capture: {exc}")
+                    self.signals.error.emit(f"Could not stop PCAP recording: {exc}")
 
             self.signals.finished.emit()

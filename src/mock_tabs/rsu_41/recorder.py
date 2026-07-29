@@ -16,14 +16,14 @@ class Recorder:
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
 
         tcpdump = shutil.which("tcpdump")
-        capture_filter = f"udp port {self.udp_port}"
+        filter = f"udp port {self.udp_port}"
 
         command = [
             tcpdump,
             "-i",
             self.interface,
             "-n",
-            capture_filter,
+            filter,
             "-w",
             str(self.output_path),
         ]
@@ -42,8 +42,8 @@ class Recorder:
             stderr = self.process.stderr.read().strip() if self.process.stderr else ""
             self.process = None
             raise RuntimeError(
-                "PCAP capture did not start. "
-                f"{stderr or 'Check capture permissions and interface name.'}"
+                "PCAP record did not start. "
+                f"{stderr or 'Check record permissions and interface name.'}"
             )
 
     def stop(self) -> None:

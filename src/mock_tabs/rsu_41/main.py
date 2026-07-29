@@ -26,8 +26,9 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from ...constants import PAYLOAD_DICT, PCAP_DIRECTORY
-from ...utils import _make_hex_edit, _make_spinbox, _normalise_hex
+from constants import PAYLOAD_DICT, PCAP_DIRECTORY
+from utils import _make_hex_edit, _make_spinbox, _normalise_hex
+
 from .workers import (
     _BroadcastWorker,
 )
@@ -58,12 +59,12 @@ class MockRsuApp(QMainWindow):
             self.amf_rsu_edit.setText("192.168.55.20")
             self.prio = 3
             self.tx_channel = 183
-            self.capture_interface_edit.setText("eth0")
+            self.recording_interface_edit.setText("eth0")
         else:
             self.amf_rsu_edit.setText("127.0.0.1")
             self.prio = 7
             self.tx_channel = 172
-            self.capture_interface_edit.setText("lo")
+            self.recording_interface_edit.setText("lo")
 
     def _create_mock_rsu_41_tab(self) -> None:
         tab = QWidget()
@@ -124,22 +125,22 @@ class MockRsuApp(QMainWindow):
             lambda name: self.payload_edit.setText(PAYLOAD_DICT.get(name, ""))
         )
 
-        capture_group = QGroupBox("PCAP Capture")
-        capture_form = QFormLayout(capture_group)
+        recording_group = QGroupBox("PCAP Recording")
+        recording_form = QFormLayout(recording_group)
 
-        self.capture_enabled_check = QCheckBox()
-        self.capture_enabled_check.setChecked(True)
-        capture_form.addRow("Capture Packets:", self.capture_enabled_check)
+        self.recording_enabled_check = QCheckBox()
+        self.recording_enabled_check.setChecked(True)
+        recording_form.addRow("Recording Packets:", self.recording_enabled_check)
 
-        self.capture_interface_edit = QLineEdit("lo")
-        self.capture_interface_edit.setPlaceholderText("Linux loopback is usually lo")
-        capture_form.addRow("Interface:", self.capture_interface_edit)
+        self.recording_interface_edit = QLineEdit("lo")
+        self.recording_interface_edit.setPlaceholderText("Linux loopback is usually lo")
+        recording_form.addRow("Interface:", self.recording_interface_edit)
 
         self.pcap_output_label = QLabel(f"Output directory: {PCAP_DIRECTORY}")
         self.pcap_output_label.setWordWrap(True)
-        capture_form.addRow(self.pcap_output_label)
+        recording_form.addRow(self.pcap_output_label)
 
-        left_layout.addWidget(capture_group)
+        left_layout.addWidget(recording_group)
 
         message_group = QGroupBox("Select Message Types to Broadcast")
         message_layout = QVBoxLayout(message_group)
@@ -246,10 +247,10 @@ class MockRsuApp(QMainWindow):
         if not self._selected_message_types():
             return "Select at least one message type."
 
-        if self.capture_enabled_check.isChecked():
-            interface = self.capture_interface_edit.text().strip()
+        if self.recording_enabled_check.isChecked():
+            interface = self.recording_interface_edit.text().strip()
             if not interface:
-                return "Enter a PCAP capture interface or disable packet capture."
+                return "Enter a PCAP recording interface or disable packet recording."
 
         return None
 
@@ -280,8 +281,8 @@ class MockRsuApp(QMainWindow):
             payload_hex=_normalise_hex(self.payload_edit.text()),
             signature=self.signature_check.isChecked(),
             encryption=self.encryption_check.isChecked(),
-            capture_enabled=self.capture_enabled_check.isChecked(),
-            capture_interface=self.capture_interface_edit.text().strip(),
+            recording_enabled=self.recording_enabled_check.isChecked(),
+            recording_interface=self.recording_interface_edit.text().strip(),
             pcap_path=pcap_path,
         )
 
@@ -289,7 +290,7 @@ class MockRsuApp(QMainWindow):
         self._broadcast_thread.signals.error.connect(self._on_broadcast_error)
         self._broadcast_thread.signals.metrics_updated.connect(self._update_metrics)
         self._broadcast_thread.signals.pcap_finished.connect(
-            lambda path: self._log(f"Capture complete: {path}")
+            lambda path: self._log(f"Recording complete: {path}")
         )
         self._broadcast_thread.signals.finished.connect(self._on_broadcast_finished)
 
