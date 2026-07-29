@@ -2,146 +2,9 @@ import socket
 import time
 from pathlib import Path
 
-from PyQt6.QtCore import QObject, QRunnable, QThread, pyqtSignal
-from recorder import _PacketCapture
+from PyQt6.QtCore import QObject, QThread, pyqtSignal
 
-from utils import _normalise_hex
-
-
-def _parse_amf(data: bytes) -> dict[str, str]:
-    try:
-        text = data.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise ValueError("AMF data is not UTF-8 text") from exc
-
-    fields: dict[str, str] = {}
-
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-
-        key, separator, value = line.partition("=")
-        if not separator or not key.strip():
-            raise ValueError(f"Malformed AMF line: {raw_line!r}")
-
-        fields[key.strip()] = value.strip()
-
-    required_fields = {
-        "Version",
-        "Type",
-        "PSID",
-        "Priority",
-        "TxMode",
-        "TxChannel",
-        "TxInterval",
-        "DeliveryStart",
-        "DeliveryStop",
-        "Signature",
-        "Encryption",
-        "Payload",
-    }
-
-    missing = sorted(required_fields.difference(fields))
-    if missing:
-        raise ValueError(f"Missing AMF fields: {', '.join(missing)}")
-
-    if fields["Type"] not in PAYLOAD_DICT:
-        raise ValueError(f"Unsupported message type: {fields['Type']}")
-
-    if fields["TxMode"] not in {"CONT", "ALT"}:
-        raise ValueError(f"Unsupported TxMode: {fields['TxMode']}")
-
-    try:
-        int(fields["Priority"])
-        int(fields["TxChannel"])
-        int(fields["TxInterval"])
-    except ValueError as exc:
-        raise ValueError("Priority, TxChannel, or TxInterval is invalid") from exc
-
-    psid = _normalise_hex(fields["PSID"])
-    payload = _normalise_hex(fields["Payload"])
-
-    if not psid:
-        raise ValueError("PSID cannot be empty")
-
-    if len(psid) % 2 != 0:
-        raise ValueError("PSID must have an even number of hex characters")
-
-    if len(payload) % 2 != 0:
-        raise ValueError("Payload must have an even number of hex characters")
-
-    try:
-        bytes.fromhex(psid)
-        bytes.fromhex(payload)
-    except ValueError as exc:
-        raise ValueError("PSID or Payload contains invalid hex characters") from exc
-
-    return fields
-    
-class _NoRsuListenerSignals(QObject):
-    started = pyqtSignal(int)
-    received = pyqtSignal(str, str, int)
-    rejected = pyqtSignal(str, str, int)
-    error = pyqtSignal(str)
-    stopped = pyqtSignal()
-
-
-class _NoRsuListenerWorker(QRunnable):
-    def __init__(self, bind_ip: str, bind_port: int):
-        super().__init__()
-        self.bind_ip = bind_ip
-        self.bind_port = bind_port
-        self.signals = _NoRsuListenerSignals()
-        self._socket: socket.socket | None = None
-        self._stop_requested = False
-
-    def stop(self) -> None:
-        self._stop_requested = True
-        if self._socket is not None:
-            try:
-                self._socket.close()
-            except OSError:
-                pass
-
-    def run(self) -> None:
-        try:
-            self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            self._socket.bind((self.bind_ip, self.bind_port))
-            self._socket.settimeout(0.25)
-            self.signals.started.emit(self.bind_port)
-        except OSError as exc:
-            self.signals.error.emit(
-                f"No RSU could not bind {self.bind_ip}:{self.bind_port}: {exc}"
-            )
-            return
-
-        try:
-            while not self._stop_requested:
-                try:
-                    data, address = self._socket.recvfrom(65535)
-                except socket.timeout:
-                    continue
-                except OSError:
-                    break
-
-                sender_ip, sender_port = address
-
-                try:
-                    fields = _parse_amf(data)
-                    message_type = fields["Type"]
-                    self.signals.received.emit(message_type, sender_ip, sender_port)
-                except (OSError, ValueError) as exc:
-                    self.signals.rejected.emit(str(exc), sender_ip, sender_port)
-        finally:
-            if self._socket is not None:
-                try:
-                    self._socket.close()
-                except OSError:
-                    pass
-            self._socket = None
-            self.signals.stopped.emit()
+from .recorder import Recorder
 
 
 class _BroadcastWorkerSignals(QObject):
@@ -210,12 +73,12 @@ class _BroadcastWorker(QThread):
         return amf.encode("utf-8")
 
     def run(self) -> None:
-        capture: _PacketCapture | None = None
+        capture: Recorder | None = None
         sock: socket.socket | None = None
 
         try:
             if self.capture_enabled:
-                capture = _PacketCapture(
+                capture = Recorder(
                     interface=self.capture_interface,
                     udp_port=self.target_port,
                     output_path=self.pcap_path,

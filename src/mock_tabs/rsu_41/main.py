@@ -1,10 +1,8 @@
 import datetime
 import sys
-import time
 
 from PyQt6.QtCore import (
     Qt,
-    QThreadPool,
 )
 from PyQt6.QtWidgets import (
     QApplication,
@@ -27,13 +25,12 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from workers import (
-    _BroadcastWorker,
-    _NoRsuListenerWorker,
-)
 
-from constants import PAYLOAD_DICT, PCAP_DIRECTORY
-from utils import _make_hex_edit, _make_spinbox, _normalise_hex
+from ...constants import PAYLOAD_DICT, PCAP_DIRECTORY
+from ...utils import _make_hex_edit, _make_spinbox, _normalise_hex
+from .workers import (
+    _BroadcastWorker,
+)
 
 
 class MockRsuApp(QMainWindow):
@@ -46,7 +43,6 @@ class MockRsuApp(QMainWindow):
         self.setCentralWidget(self.tabs)
 
         self._broadcast_thread: _BroadcastWorker | None = None
-        self._no_rsu_task: _NoRsuListenerWorker | None = None
 
         self._create_mock_rsu_41_tab()
 
@@ -55,7 +51,6 @@ class MockRsuApp(QMainWindow):
             self._broadcast_thread.stop()
             self._broadcast_thread.wait(3000)
 
-        self._stop_no_listener()
         event.accept()
 
     def _on_target_mode_changed(self, selected_mode: str) -> None:
@@ -221,42 +216,6 @@ class MockRsuApp(QMainWindow):
         self.amf_log.clear()
         self.metrics_display.clear()
 
-    def _start_no_listener(self) -> bool:
-        if self._no_rsu_task is not None:
-            return True
-
-        task = _NoRsuListenerWorker(
-            bind_ip="127.0.0.1",
-            bind_port=self.amf_port_spin.value(),
-        )
-
-        task.signals.started.connect(
-            lambda port: self._log(f"No RSU listening on 127.0.0.1:{port}")
-        )
-        task.signals.received.connect(
-            lambda message_type, ip, port: self._log(
-                f"No RSU accepted {message_type} from {ip}:{port}."
-            )
-        )
-        task.signals.rejected.connect(
-            lambda reason, ip, port: self._log(
-                f"No RSU rejected AMF from {ip}:{port}: {reason}"
-            )
-        )
-        task.signals.error.connect(self._log)
-        task.signals.stopped.connect(lambda: self._log("No RSU listener stopped."))
-
-        self._no_rsu_task = task
-        QThreadPool.globalInstance().start(task)
-        time.sleep(0.1)
-
-        return True
-
-    def _stop_no_listener(self) -> None:
-        if self._no_rsu_task is not None:
-            self._no_rsu_task.stop()
-            self._no_rsu_task = None
-
     def _selected_message_types(self) -> list[str]:
         selected: list[str] = []
         for index in range(self.msg_list_widget.count()):
@@ -304,16 +263,6 @@ class MockRsuApp(QMainWindow):
         validation_error = self._validate_input()
         if validation_error is not None:
             QMessageBox.warning(self, "Validation Error", validation_error)
-            return
-
-        is_no = self.target_mode_combo.currentText().startswith("No")
-
-        if is_no and not self._start_no_listener():
-            QMessageBox.critical(
-                self,
-                "No RSU Error",
-                "Unable to start the No RSU listener.",
-            )
             return
 
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")

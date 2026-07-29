@@ -4,7 +4,7 @@ import time
 from pathlib import Path
 
 
-class _PacketCapture:
+class Recorder:
     def __init__(self, interface: str, udp_port: int, output_path: Path):
         self.interface = interface
         self.udp_port = udp_port
