@@ -5,25 +5,48 @@ import sys
 from binascii import unhexlify
 from typing import Any, Callable, Dict, List, Optional
 
-from PyQt6.QtCore import (
-    QObject, QRegularExpression, QRunnable, Qt, QThreadPool, pyqtSignal, pyqtSlot,
-)
-from PyQt6.QtGui import QBrush, QColor, QRegularExpressionValidator
-from PyQt6.QtWidgets import (
-    QAbstractItemView, QAbstractSpinBox, QApplication, QButtonGroup, QComboBox,
-    QDialog, QFormLayout, QGridLayout, QGroupBox, QHBoxLayout, QHeaderView,
-    QLabel, QLineEdit, QMainWindow, QMessageBox, QPushButton, QScrollArea,
-    QSpinBox, QTableWidget, QTableWidgetItem, QTabWidget, QTextEdit,
-    QVBoxLayout, QWidget,
-)
-
 from dotenv import load_dotenv
-from snmp import Engine, Timeout, ErrorResponse
+from PyQt6.QtCore import (
+    QObject,
+    QRunnable,
+    Qt,
+    QThreadPool,
+    pyqtSignal,
+    pyqtSlot,
+)
+from PyQt6.QtGui import QBrush, QColor
+from PyQt6.QtWidgets import (
+    QAbstractItemView,
+    QApplication,
+    QButtonGroup,
+    QComboBox,
+    QDialog,
+    QFormLayout,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QTableWidget,
+    QTableWidgetItem,
+    QTabWidget,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
+from snmp import Engine, ErrorResponse, Timeout
 from snmp.security.usm.auth import HmacMd5, HmacSha, HmacSha256, HmacSha512
-from snmp.security.usm.priv import DesCbc, AesCfb128
-from snmp.smi import OctetString, Integer32
+from snmp.security.usm.priv import AesCfb128, DesCbc
+from snmp.smi import Integer32, OctetString
 
 import cr_helper
+from constants import ALIGN_RIGHT
+from utils import _make_hex_edit, _make_spinbox
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env'))
 
@@ -36,30 +59,6 @@ SNMP_PORT = int(os.getenv('SNMP_PORT', 161))
 SNMP_USER = os.getenv('SNMP_USER')
 AUTH_PASSWORD = os.getenv('AUTH_PASSWORD')
 PRIV_PASSWORD = os.getenv('PRIV_PASSWORD')
-
-ALIGN_RIGHT = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-HEX_REGEX = QRegularExpression(r'^[0-9A-Fa-f]*$')
-
-
-def _hex_validator() -> QRegularExpressionValidator:
-    return QRegularExpressionValidator(HEX_REGEX)
-
-
-def _make_spinbox(value: int, lo: int, hi: int, readonly: bool = False) -> QSpinBox:
-    sb = QSpinBox()
-    sb.setRange(lo, hi)
-    sb.setValue(value)
-    if readonly:
-        sb.setReadOnly(True)
-        sb.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
-    return sb
-
-
-def _make_hex_edit(value: str = "") -> QLineEdit:
-    le = QLineEdit(value)
-    le.setValidator(_hex_validator())
-    return le
-
 
 # ---------- Async worker plumbing ----------
 
