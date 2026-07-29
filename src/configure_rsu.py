@@ -46,6 +46,7 @@ from snmp.smi import Integer32, OctetString
 
 import cr_helper
 from constants import ALIGN_RIGHT
+from mock_tabs.rsu_41.main import Rsu41Tab
 from utils import _make_hex_edit, _make_spinbox
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env'))
@@ -113,6 +114,8 @@ class RSUConfigurationApp(QMainWindow):
         self._create_transmitted_message_forward_tab()
         self._create_store_and_repeat_tab()
         self._create_active_message_tab()
+        self.rsu_tab = Rsu41Tab()
+        self.tabs.addTab(self.rsu_tab, "RSU 4.1 Mock Messages")
 
     # ---------- Mode MIB helpers ----------
     def _set_mode_mib(self, value: str) -> None:

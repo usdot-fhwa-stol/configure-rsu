@@ -34,41 +34,34 @@ from .workers import (
 )
 
 
-class MockRsuApp(QMainWindow):
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle("Mock RSU 4.1 Broadcast Simulator")
-        self.resize(1120, 760)
-
-        self.tabs = QTabWidget()
-        self.setCentralWidget(self.tabs)
+class Rsu41Tab(QWidget):
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
 
         self._broadcast_thread: _BroadcastWorker | None = None
 
-        self._create_mock_rsu_41_tab()
+        self._build_ui()
 
-    def closeEvent(self, event) -> None:
+    def shutdown(self) -> None:
+        """Stop any in-flight broadcast. Call this before the tab is destroyed."""
         if self._broadcast_thread is not None:
             self._broadcast_thread.stop()
             self._broadcast_thread.wait(3000)
-
-        event.accept()
 
     def _on_target_mode_changed(self, selected_mode: str) -> None:
         if selected_mode == "Using RSU":
             self.amf_rsu_edit.setText("192.168.55.20")
             self.prio = 3
             self.tx_channel = 183
-            self.recording_interface_edit.setText("eth0")
+            self.recording_interface_edit.setText("enp60s0")
         else:
             self.amf_rsu_edit.setText("127.0.0.1")
             self.prio = 7
             self.tx_channel = 172
             self.recording_interface_edit.setText("lo")
 
-    def _create_mock_rsu_41_tab(self) -> None:
-        tab = QWidget()
-        main_layout = QVBoxLayout(tab)
+    def _build_ui(self) -> None:
+        main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(12, 12, 12, 12)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -150,7 +143,7 @@ class MockRsuApp(QMainWindow):
             item = QListWidgetItem(message_type)
             item.setCheckState(
                 Qt.CheckState.Checked
-                if message_type in {"MAP", "SPAT"}
+                if message_type in {"BSM"}
                 else Qt.CheckState.Unchecked
             )
             self.msg_list_widget.addItem(item)
@@ -206,8 +199,6 @@ class MockRsuApp(QMainWindow):
 
         self.target_mode_combo.currentTextChanged.connect(self._on_target_mode_changed)
         self._on_target_mode_changed(self.target_mode_combo.currentText())
-
-        self.tabs.addTab(tab, "RSU 4.1 Mock Messages")
 
     def _log(self, message: str) -> None:
         timestamp = datetime.datetime.now().strftime("%H:%M:%S")
@@ -331,10 +322,27 @@ class MockRsuApp(QMainWindow):
         self.metrics_display.append(text)
 
 
+class _StandaloneWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Mock RSU 4.1 Broadcast Simulator")
+        self.resize(1120, 760)
+
+        self.tab_widget = Rsu41Tab()
+
+        tabs = QTabWidget()
+        tabs.addTab(self.tab_widget, "RSU 4.1 Mock Messages")
+        self.setCentralWidget(tabs)
+
+    def closeEvent(self, event) -> None:
+        self.tab_widget.shutdown()
+        event.accept()
+
+
 def main() -> None:
-    """Launch the Mock RSU 4.1 GUI."""
+    """Launch the Mock RSU 4.1 GUI standalone (for local testing only)."""
     app = QApplication(sys.argv)
-    window = MockRsuApp()
+    window = _StandaloneWindow()
     window.show()
     sys.exit(app.exec())
 
