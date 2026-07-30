@@ -29,8 +29,8 @@ from PyQt6.QtWidgets import (
 from constants import PAYLOAD_DICT, PCAP_DIRECTORY
 from utils import _make_hex_edit, _make_spinbox, _normalise_hex
 
-from .workers import (
-    _BroadcastWorker,
+from .broadcaster import (
+    BroadcastWorker,
 )
 
 

@@ -7,7 +7,7 @@ from PyQt6.QtCore import QObject, QThread, pyqtSignal
 from .recorder import Recorder
 
 
-class _BroadcastWorkerSignals(QObject):
+class BroadcastWorkerSignals(QObject):
     log = pyqtSignal(str)
     metrics_updated = pyqtSignal(str, dict)
     finished = pyqtSignal()
@@ -16,7 +16,7 @@ class _BroadcastWorkerSignals(QObject):
     pcap_finished = pyqtSignal(str)
 
 
-class _BroadcastWorker(QThread):
+class BroadcastWorker(QThread):
     def __init__(
         self,
         target_ip: str,
@@ -49,7 +49,7 @@ class _BroadcastWorker(QThread):
         self.recording_enabled = recording_enabled
         self.recording_interface = recording_interface
         self.pcap_path = pcap_path
-        self.signals = _BroadcastWorkerSignals()
+        self.signals = BroadcastWorkerSignals()
         self._stop_requested = False
 
     def stop(self) -> None:
