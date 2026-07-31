@@ -164,13 +164,13 @@ class RSUConfigurationApp(QMainWindow):
         form.addRow("SNMPv3 Username:", self.snmpv3_user_edit)
 
         self.security_level_combo = QComboBox()
-        self.security_level_combo.setEditable(True)
+        self.security_level_combo.setEditable(False)
         self.security_level_combo.addItems(["noAuthNoPriv", "authNoPriv", "authPriv"])
         self.security_level_combo.setCurrentText("authPriv")
         form.addRow("Security Level:", self.security_level_combo)
 
         self.auth_protocol_combo = QComboBox()
-        self.auth_protocol_combo.setEditable(True)
+        self.auth_protocol_combo.setEditable(False)
         self.auth_protocol_combo.addItems(["MD5", "SHA", "SHA256", "SHA512"])
         self.auth_protocol_combo.setCurrentText("SHA")
         form.addRow("Auth Protocol:", self.auth_protocol_combo)
@@ -180,7 +180,7 @@ class RSUConfigurationApp(QMainWindow):
         form.addRow("Auth Password:", self.auth_password_edit)
 
         self.privacy_protocol_combo = QComboBox()
-        self.privacy_protocol_combo.setEditable(True)
+        self.privacy_protocol_combo.setEditable(False)
         self.privacy_protocol_combo.addItems(["DES", "AES"])
         self.privacy_protocol_combo.setCurrentText("AES")
         form.addRow("Privacy Protocol:", self.privacy_protocol_combo)
@@ -1056,12 +1056,29 @@ class RSUConfigurationApp(QMainWindow):
 
         srm_entries: List[dict] = []
 
+        def update_field_states() -> None:
+            is_ntcip = self.mode_mib == "ntcip1218"
+            for entry in srm_entries:
+                for w in entry.get('ntcip_widgets', []):
+                    w.setEnabled(is_ntcip)
+                for w in entry.get('rsu41_widgets', []):
+                    w.setEnabled(not is_ntcip)
+
         def destroy_srm_entry(idx: int) -> None:
-            delete_oid = f"1.3.6.1.4.1.1206.4.2.18.3.2.1.9.{idx}"
+            if self.mode_mib == "ntcip1218":
+                delete_oid = f"1.3.6.1.4.1.1206.4.2.18.3.2.1.9.{idx}"
+            else:
+                delete_oid = f"1.0.15628.4.1.4.1.11.{idx}"
             self._destroy_entry(delete_oid, on_done=get_srm_info)
 
         def get_srm_info() -> None:
             add_srm_btn.setEnabled(True)
+            if self.mode_mib == "ntcip1218":
+                base_oid = "1.3.6.1.4.1.1206.4.2.18.3.2.1"
+                payload_col = 7
+            else:
+                base_oid = "1.0.15628.4.1.4.1"
+                payload_col = 9
 
             def work():
                 session = self._get_session()
@@ -1069,8 +1086,8 @@ class RSUConfigurationApp(QMainWindow):
                 for i in range(1, 7):
                     try:
                         values = []
-                        for j in (2, 7):  # psid and payload
-                            handle = session.get(f"1.3.6.1.4.1.1206.4.2.18.3.2.1.{j}.{i}")
+                        for j in (2, payload_col):  # psid and payload
+                            handle = session.get(f"{base_oid}.{j}.{i}")
                             varbind_list = handle.wait() if hasattr(handle, 'wait') else handle
                             values.append(cr_helper.format_snmp_value(varbind_list[0]))
                         results.append((i, values, None))
@@ -1109,6 +1126,9 @@ class RSUConfigurationApp(QMainWindow):
             enable = entry_vars['enable_spin'].value()
             priority = entry_vars['priority_spin'].value()
             options = entry_vars['options_edit'].text().strip()
+            dsrc_msg_id = entry_vars['dsrc_msg_id_spin'].value()
+            tx_mode = entry_vars['tx_mode_spin'].value()
+            mode_mib = self.mode_mib
 
             if not psid:
                 QMessageBox.critical(self, "Validation Error", f"Entry {srm_index}: PSID cannot be empty")
@@ -1118,8 +1138,12 @@ class RSUConfigurationApp(QMainWindow):
                 return
 
             try:
-                start_date_bytes = cr_helper.convert_datetime_to_snmp(start_date)
-                stop_date_bytes = cr_helper.convert_datetime_to_snmp(stop_date)
+                if mode_mib == "ntcip1218":
+                    start_date_bytes = cr_helper.convert_datetime_to_snmp(start_date)
+                    stop_date_bytes = cr_helper.convert_datetime_to_snmp(stop_date)
+                else:
+                    start_date_bytes = cr_helper.convert_datetime_to_rsu41(start_date)
+                    stop_date_bytes = cr_helper.convert_datetime_to_rsu41(stop_date)
             except ValueError as e:
                 QMessageBox.critical(self, "Validation Error", f"Entry {srm_index}: {e}")
                 return
@@ -1127,19 +1151,35 @@ class RSUConfigurationApp(QMainWindow):
             def work():
                 self._set_standby()
                 session = self._get_session()
-                base_oid = "1.3.6.1.4.1.1206.4.2.18.3.2.1"
-                session.set(
-                    (f"{base_oid}.2.{srm_index}", OctetString(unhexlify(psid))),
-                    (f"{base_oid}.3.{srm_index}", Integer32(channel)),
-                    (f"{base_oid}.4.{srm_index}", Integer32(interval)),
-                    (f"{base_oid}.5.{srm_index}", OctetString(start_date_bytes)),
-                    (f"{base_oid}.6.{srm_index}", OctetString(stop_date_bytes)),
-                    (f"{base_oid}.7.{srm_index}", OctetString(unhexlify(payload))),
-                    (f"{base_oid}.8.{srm_index}", Integer32(enable)),
-                    (f"{base_oid}.9.{srm_index}", Integer32(4)),
-                    (f"{base_oid}.10.{srm_index}", Integer32(priority)),
-                    (f"{base_oid}.11.{srm_index}", OctetString(unhexlify(options))),
-                )
+                if mode_mib == "ntcip1218":
+                    base_oid = "1.3.6.1.4.1.1206.4.2.18.3.2.1"
+                    session.set(
+                        (f"{base_oid}.2.{srm_index}", OctetString(unhexlify(psid))),
+                        (f"{base_oid}.3.{srm_index}", Integer32(channel)),
+                        (f"{base_oid}.4.{srm_index}", Integer32(interval)),
+                        (f"{base_oid}.5.{srm_index}", OctetString(start_date_bytes)),
+                        (f"{base_oid}.6.{srm_index}", OctetString(stop_date_bytes)),
+                        (f"{base_oid}.7.{srm_index}", OctetString(unhexlify(payload))),
+                        (f"{base_oid}.8.{srm_index}", Integer32(enable)),
+                        (f"{base_oid}.9.{srm_index}", Integer32(4)),
+                        (f"{base_oid}.10.{srm_index}", Integer32(priority)),
+                        (f"{base_oid}.11.{srm_index}", OctetString(unhexlify(options))),
+                    )
+                else:
+                    # RSU 4.1 rsuSRMStatusTable
+                    base_oid = "1.0.15628.4.1.4.1"
+                    session.set(
+                        (f"{base_oid}.2.{srm_index}", OctetString(unhexlify(psid))),
+                        (f"{base_oid}.3.{srm_index}", Integer32(dsrc_msg_id)),
+                        (f"{base_oid}.4.{srm_index}", Integer32(tx_mode)),
+                        (f"{base_oid}.5.{srm_index}", Integer32(channel)),
+                        (f"{base_oid}.6.{srm_index}", Integer32(interval)),
+                        (f"{base_oid}.7.{srm_index}", OctetString(start_date_bytes)),
+                        (f"{base_oid}.8.{srm_index}", OctetString(stop_date_bytes)),
+                        (f"{base_oid}.9.{srm_index}", OctetString(unhexlify(payload))),
+                        (f"{base_oid}.10.{srm_index}", Integer32(enable)),
+                        (f"{base_oid}.11.{srm_index}", Integer32(4)),
+                    )
                 self._set_operate()
 
             def on_ok(_):
@@ -1206,6 +1246,14 @@ class RSUConfigurationApp(QMainWindow):
             options_edit = _make_hex_edit("01")
             grid.addWidget(options_edit, 6, 1, 1, 3)
 
+            # DSRC Msg ID and TX Mode (RSU 4.1 only)
+            grid.addWidget(QLabel("DSRC Msg ID:"), 7, 0, ALIGN_RIGHT)
+            dsrc_spin = _make_spinbox(31, 0, 255)
+            grid.addWidget(dsrc_spin, 7, 1)
+            grid.addWidget(QLabel("TX Mode:"), 7, 2, ALIGN_RIGHT)
+            txmode_spin = _make_spinbox(0, 0, 1)
+            grid.addWidget(txmode_spin, 7, 3)
+
             btn_row = QHBoxLayout()
             btn_row.addStretch(1)
             set_btn = QPushButton("Set Entry")
@@ -1213,7 +1261,7 @@ class RSUConfigurationApp(QMainWindow):
             btn_row.addWidget(set_btn)
             btn_row.addWidget(remove_btn)
             btn_row.addStretch(1)
-            grid.addLayout(btn_row, 7, 0, 1, 4)
+            grid.addLayout(btn_row, 8, 0, 1, 4)
 
             grid.setColumnStretch(1, 1)
             grid.setColumnStretch(3, 1)
@@ -1230,6 +1278,10 @@ class RSUConfigurationApp(QMainWindow):
                 'enable_spin': enable_spin,
                 'priority_spin': priority_spin,
                 'options_edit': options_edit,
+                'dsrc_msg_id_spin': dsrc_spin,
+                'tx_mode_spin': txmode_spin,
+                'ntcip_widgets': [priority_spin, options_edit],
+                'rsu41_widgets': [dsrc_spin, txmode_spin],
             }
 
             index_spin.valueChanged.connect(
@@ -1240,6 +1292,9 @@ class RSUConfigurationApp(QMainWindow):
 
             config_inner_layout.insertWidget(config_inner_layout.count() - 1, frame)
             srm_entries.append(entry_vars)
+            update_field_states()
+
+        self._register_mode_mib_callback(update_field_states)
 
         add_srm_btn = QPushButton("Add SRM Entry")
         add_srm_btn.setEnabled(False)

@@ -352,6 +352,20 @@ Options: Bit-mapped options (BITS, hex):
     Bit 1: 0=Secure,       1=Unsecure
     Bit 2: 0=ContXmit,     1=NoXmitShortTermXceeded
     Bit 3: 0=ContXmit,     1=NoXmitLongTermXceeded
+
+=== RSU Mode differences ===
+The active RSU Mode (set on the SNMP Credentials tab) selects the MIB used
+and which fields apply. Fields that do not apply to the selected mode are
+grayed out.
+
+NTCIP 1218 (1.3.6.1.4.1.1206.4.2.18.3.2.1):
+    Uses Priority and Options. Start/Stop dates are 8-octet DateAndTime
+    values (e.g. 2025-01-01,00:00:00.0 -> 07 E9 01 01 00 00 00 00).
+
+RSU 4.1 (rsuSRMStatusTable, 1.0.15628.4.1.4.1):
+    Uses DSRC Msg ID and TX Mode (0=cont, 1=alt) instead of Priority/Options.
+    Start/Stop dates are 6-octet values that drop the seconds/deciseconds
+    (e.g. 2025-01-01,00:00 UTC -> 07 E9 01 01 00 00).
 """
 
 def get_amf_help_content() -> str:
