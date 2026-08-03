@@ -1,3 +1,5 @@
+"""Capture UDP traffic to a PCAP file with tcpdump."""
+
 import shutil
 import subprocess
 import time
@@ -5,7 +7,16 @@ from pathlib import Path
 
 
 class Recorder:
+    """Start and stop a tcpdump packet capture."""
+
     def __init__(self, interface: str, udp_port: int, output_path: Path):
+        """Set up the packet capture.
+
+        Args:
+            interface: Network interface to capture.
+            udp_port: UDP port to capture.
+            output_path: Path for the PCAP file.
+        """
         self.interface = interface
         self.udp_port = udp_port
         self.output_path = output_path
@@ -13,6 +24,7 @@ class Recorder:
         self.tool_name = ""
 
     def start(self) -> None:
+        """Start tcpdump and check that it is still running."""
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
 
         tcpdump = shutil.which("tcpdump")
@@ -47,6 +59,7 @@ class Recorder:
             )
 
     def stop(self) -> None:
+        """Stop tcpdump and wait for it to exit."""
         if self.process is None:
             return
 
