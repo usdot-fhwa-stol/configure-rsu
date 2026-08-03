@@ -1,3 +1,5 @@
+"""Capture UDP traffic to a PCAP file with tcpdump."""
+
 import select
 import shutil
 import signal
@@ -7,12 +9,21 @@ from pathlib import Path
 
 
 class Recorder:
+    """Record UDP traffic on an interface with tcpdump."""
+
     def __init__(
         self,
         interface: str,
         udp_port: int,
         output_path: Path,
     ):
+        """Set up a packet recorder.
+
+        Args:
+            interface: Network interface to capture from.
+            udp_port: UDP port to capture.
+            output_path: Path for the PCAP file.
+        """
         self.interface = interface
         self.udp_port = udp_port
         self.output_path = output_path
@@ -20,6 +31,8 @@ class Recorder:
         self.tool_name = ""
 
     def start(self) -> None:
+        """Start tcpdump and wait for it to begin listening."""
+
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
 
         tcpdump = shutil.which("tcpdump")
@@ -57,6 +70,16 @@ class Recorder:
         self._wait_until_ready()
 
     def _wait_until_ready(self, timeout: float = 5.0) -> None:
+        """Wait for tcpdump to report that it is listening.
+
+        Args:
+            timeout: Seconds to wait before giving up.
+
+        Raises:
+            RuntimeError: If tcpdump exits, cannot be monitored, or does not
+                start listening before the timeout.
+        """
+        
         if self.process is None:
             raise RuntimeError("tcpdump process was not created.")
 
@@ -111,6 +134,8 @@ class Recorder:
         )
 
     def stop(self) -> str:
+        """Stop tcpdump and return its remaining standard error output."""
+
         if self.process is None:
             return ""
 
