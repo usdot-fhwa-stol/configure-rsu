@@ -1,3 +1,5 @@
+"""Send mock RSU 4.1 Active Messaging Format packets over UDP."""
+
 import socket
 import time
 from collections.abc import Callable
@@ -11,6 +13,8 @@ MetricsCallback = Callable[[str, dict[str, Any]], None]
 
 
 class BroadcastRunner:
+    """Broadcast mock AMF messages to an RSU over UDP."""
+
     def __init__(
         self,
         target_ip: str,
@@ -30,6 +34,27 @@ class BroadcastRunner:
         log_callback: LogCallback | None = None,
         metrics_callback: MetricsCallback | None = None,
     ):
+        """Set up a message broadcast.
+
+        Args:
+            target_ip: IP address of the target RSU.
+            target_port: UDP port used by the target.
+            selected_messages: Message types to send.
+            frequency_hz: Messages sent per second.
+            period_seconds: How long to send each message type.
+            psid: PSID value for outgoing messages.
+            payload_hex: Hex payload included in outgoing messages.
+            priority: Message priority.
+            tx_channel: Transmission channel.
+            signature: Whether to mark messages as signed.
+            encryption: Whether to mark messages as encrypted.
+            recording_enabled: Whether to capture traffic to a PCAP file.
+            recording_interface: Interface used for packet capture.
+            pcap_path: Path for the PCAP output file.
+            log_callback: Optional callback for log messages.
+            metrics_callback: Optional callback for send metrics.
+        """
+        
         self.target_ip = target_ip
         self.target_port = target_port
         self.selected_messages = selected_messages
@@ -52,9 +77,15 @@ class BroadcastRunner:
         self._stop_requested = False
 
     def stop(self) -> None:
+        """Stop the current broadcast."""
         self._stop_requested = True
 
     def log(self, message: str) -> None:
+        """Send a message to the log callback.
+
+        Args:
+            message: Message to log.
+        """
         if self.log_callback is not None:
             self.log_callback(message)
 
@@ -63,10 +94,24 @@ class BroadcastRunner:
         message_type: str,
         metrics: dict[str, Any],
     ) -> None:
+        """Send metrics to the metrics callback.
+
+        Args:
+            message_type: Message type the metrics apply to.
+            metrics: Send results for the message type.
+        """
         if self.metrics_callback is not None:
             self.metrics_callback(message_type, metrics)
 
     def _build_amf(self, message_type: str) -> bytes:
+        """Build an AMF packet for a message type.
+
+        Args:
+            message_type: AMF message type.
+
+        Returns:
+            UTF-8 encoded AMF packet data.
+        """
         amf = (
             "Version=0.7\n"
             f"Type={message_type}\n"
@@ -85,6 +130,8 @@ class BroadcastRunner:
         return amf.encode("utf-8")
 
     def run(self) -> None:
+        """Send each selected message type and close open resources."""
+
         recorder: Recorder | None = None
         sock: socket.socket | None = None
 
@@ -134,6 +181,13 @@ class BroadcastRunner:
         message_type: str,
         interval_seconds: float,
     ) -> None:
+        """Send one message type until its time period ends.
+
+        Args:
+            sock: UDP socket used to send packets.
+            message_type: AMF message type to send.
+            interval_seconds: Time between send attempts.
+        """
         attempted_count = 0
         sent_count = 0
         total_bytes_sent = 0
