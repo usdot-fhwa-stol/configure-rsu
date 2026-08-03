@@ -46,7 +46,7 @@ from snmp.smi import Integer32, OctetString
 
 import cr_helper
 from constants import ALIGN_RIGHT
-from mock_tabs.rsu_41.main import Rsu41Tab
+from mock_tabs.rsu_4_1.main import Rsu41Tab
 from utils import _make_hex_edit, _make_spinbox
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env'))

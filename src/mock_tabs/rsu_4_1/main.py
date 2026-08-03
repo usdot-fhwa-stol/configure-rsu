@@ -38,7 +38,7 @@ class Rsu41Tab(QWidget):
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
 
-        self._broadcast_thread: _BroadcastWorker | None = None
+        self._broadcast_thread: BroadcastWorker | None = None
 
         self._build_ui()
 
@@ -258,11 +258,11 @@ class Rsu41Tab(QWidget):
             return
 
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        pcap_path = PCAP_DIRECTORY / f"mock_rsu_41_{timestamp}.pcap"
+        pcap_path = PCAP_DIRECTORY / f"mock_rsu_4_1_{timestamp}.pcap"
 
         self.metrics_display.clear()
 
-        self._broadcast_thread = _BroadcastWorker(
+        self._broadcast_thread = BroadcastWorker(
             target_ip=self.amf_rsu_edit.text().strip(),
             target_port=self.amf_port_spin.value(),
             selected_messages=self._selected_message_types(),

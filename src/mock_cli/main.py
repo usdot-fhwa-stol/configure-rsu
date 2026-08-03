@@ -184,7 +184,7 @@ def make_pcap_path(args: argparse.Namespace) -> Path:
         return args.pcap_path
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    return PCAP_DIRECTORY / f"mock_rsu_41_{timestamp}.pcap"
+    return PCAP_DIRECTORY / f"mock_rsu_4_1_{timestamp}.pcap"
 
 
 def log(message: str) -> None:
