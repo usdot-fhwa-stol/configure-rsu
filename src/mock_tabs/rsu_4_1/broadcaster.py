@@ -6,6 +6,8 @@ from mock_common.runner import BroadcastRunner
 
 
 class BroadcastWorkerSignals(QObject):
+    """Signals emitted by `BroadcastWorker`."""
+
     log = pyqtSignal(str)
     metrics_updated = pyqtSignal(str, dict)
     finished = pyqtSignal()
@@ -13,6 +15,8 @@ class BroadcastWorkerSignals(QObject):
 
 
 class BroadcastWorker(QThread):
+    """Send mock RSU 4.1 AMF messages without blocking the UI thread."""
+
     def __init__(
         self,
         *,
@@ -31,6 +35,22 @@ class BroadcastWorker(QThread):
         recording_interface: str,
         pcap_path: Path,
     ):
+        """Set up the broadcast worker.
+
+        Args:
+            target_ip: IP address of the target RSU.
+            target_port: UDP port used by the target.
+            selected_messages: AMF message types to send.
+            frequency_hz: Messages sent per second.
+            period_seconds: How long to send each message type.
+            psid: PSID value for outgoing messages.
+            payload_hex: Hex payload included in outgoing messages.
+            signature: Whether to mark messages as signed.
+            encryption: Whether to mark messages as encrypted.
+            recording_enabled: Whether to record traffic to a PCAP file.
+            recording_interface: Interface used for packet capture.
+            pcap_path: Path for the PCAP output file.
+        """
         super().__init__()
 
         self.signals = BroadcastWorkerSignals()

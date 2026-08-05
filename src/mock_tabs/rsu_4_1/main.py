@@ -1,3 +1,5 @@
+"""PyQt6 interface for configuring and running RSU 4.1 AMF broadcasts."""
+
 import datetime
 import sys
 
@@ -35,7 +37,10 @@ from .broadcaster import (
 
 
 class Rsu41Tab(QWidget):
+    """Configure and control RSU 4.1 message broadcasts."""
     def __init__(self, parent: QWidget | None = None):
+        """Create the broadcast configuration tab."""
+
         super().__init__(parent)
 
         self._broadcast_thread: BroadcastWorker | None = None
@@ -43,7 +48,7 @@ class Rsu41Tab(QWidget):
         self._build_ui()
 
     def shutdown(self) -> None:
-        """Stop any in-flight broadcast. Call this before the tab is destroyed."""
+        """Stop the active broadcast and wait for the worker to exit."""
         if self._broadcast_thread is not None:
             self._broadcast_thread.stop()
             self._broadcast_thread.wait(3000)
@@ -63,6 +68,7 @@ class Rsu41Tab(QWidget):
             self.tx_channel_spin.setValue(172)
 
     def _build_ui(self) -> None:
+        """Create the broadcast controls, output panes, and buttons."""
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(12, 12, 12, 12)
 
@@ -209,14 +215,21 @@ class Rsu41Tab(QWidget):
         self._on_target_mode_changed(self.target_mode_combo.currentText())
 
     def _log(self, message: str) -> None:
+        """Append a timestamped message to the log pane.
+
+        Args:
+            message: Message to display.
+        """
         timestamp = datetime.datetime.now().strftime("%H:%M:%S")
         self.amf_log.append(f"[{timestamp}] {message}")
 
     def _clear_output(self) -> None:
+        """Clear the log and metrics panes."""
         self.amf_log.clear()
         self.metrics_display.clear()
 
     def _selected_message_types(self) -> list[str]:
+        """Return the checked message types."""
         selected: list[str] = []
         for index in range(self.msg_list_widget.count()):
             item = self.msg_list_widget.item(index)
@@ -225,6 +238,11 @@ class Rsu41Tab(QWidget):
         return selected
 
     def _validate_input(self) -> str | None:
+        """Validate the broadcast settings.
+
+        Returns:
+            An error message if validation fails; otherwise, ``None``.
+        """
         psid = _normalise_hex(self.psid_edit.text())
         payload = _normalise_hex(self.payload_edit.text())
 
@@ -254,6 +272,7 @@ class Rsu41Tab(QWidget):
         return None
 
     def _toggle_broadcast(self) -> None:
+        """Start a broadcast or request that the active one stop."""
         if self._broadcast_thread is not None and self._broadcast_thread.isRunning():
             self._log("Stop requested.")
             self._broadcast_thread.stop()
@@ -266,7 +285,7 @@ class Rsu41Tab(QWidget):
             return
 
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        pcap_path = PCAP_DIRECTORY / f"mock_rsu_41_{timestamp}.pcap"
+        pcap_path = PCAP_DIRECTORY / f"mock_rsu_4_1_{timestamp}.pcap"
 
         self.metrics_display.clear()
 
@@ -297,16 +316,27 @@ class Rsu41Tab(QWidget):
         self._broadcast_thread.start()
 
     def _on_broadcast_error(self, message: str) -> None:
+        """Log and display a broadcast error.
+
+        Args:
+            message: Error message from the worker.
+        """
         self._log(f"ERROR: {message}")
         QMessageBox.warning(self, "Broadcast Error", message)
 
     def _on_broadcast_finished(self) -> None:
+        """Reset the controls after the worker finishes."""
         self.start_stop_button.setText("Start Automated Broadcast")
         self.start_stop_button.setEnabled(True)
         self._broadcast_thread = None
 
     def _update_metrics(self, message_type: str, metrics: dict) -> None:
-        """Format and append one message type's metrics to the metrics pane."""
+        """Format and display metrics for one message type.
+
+        Args:
+            message_type: Message type associated with the metrics.
+            metrics: Broadcast counts, throughput, and errors.
+        """
         errors = metrics["error_types"]
         errors_text = (
             "None"
@@ -330,6 +360,8 @@ class Rsu41Tab(QWidget):
 
 
 class _StandaloneWindow(QMainWindow):
+    """Main window used when running the GUI directly."""
+    
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Mock RSU 4.1 Broadcast Simulator")

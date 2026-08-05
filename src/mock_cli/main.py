@@ -1,3 +1,5 @@
+"""Command-line interface for sending mock RSU 4.1 AMF messages."""
+
 import argparse
 import datetime
 import sys
@@ -16,6 +18,8 @@ MESSAGE_TYPES = ("MAP", "SPAT", "BSM", "SDSM")
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the command-line argument parser."""
+
     parser = argparse.ArgumentParser(
         description="Mock RSU 4.1 UDP broadcast simulator.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -105,6 +109,8 @@ def validate_args(
     parser: argparse.ArgumentParser,
     args: argparse.Namespace,
 ) -> None:
+    """Validate arguments and normalize hexadecimal values."""
+
     if not 1 <= args.port <= 65535:
         parser.error("--port must be between 1 and 65535.")
 
@@ -143,6 +149,8 @@ def validate_args(
 
 
 def apply_mode_defaults(args: argparse.Namespace) -> None:
+    """Apply target, interface, and radio defaults for the selected mode."""
+
     if args.mode == MODE_USING_RSU:
         default_ip = "192.168.55.20"
         default_interface = "enp60s0"
@@ -162,6 +170,8 @@ def apply_mode_defaults(args: argparse.Namespace) -> None:
 
 
 def resolve_payload(args: argparse.Namespace) -> None:
+    """Set the payload from the command line, a named payload, or a default."""
+
     if args.payload is not None:
         return
 
@@ -178,14 +188,18 @@ def resolve_payload(args: argparse.Namespace) -> None:
 
 
 def make_pcap_path(args: argparse.Namespace) -> Path:
+    """Return the requested PCAP path or create a timestamped default path."""
+
     if args.pcap_path is not None:
         return args.pcap_path
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    return PCAP_DIRECTORY / f"mock_rsu_41_{timestamp}.pcap"
+    return PCAP_DIRECTORY / f"mock_rsu_4_1_{timestamp}.pcap"
 
 
 def log(message: str) -> None:
+    """Print a timestamped log message."""
+
     timestamp = datetime.datetime.now().strftime("%H:%M:%S")
     print(f"[{timestamp}] {message}", flush=True)
 
@@ -194,6 +208,8 @@ def print_metrics(
     message_type: str,
     metrics: dict[str, Any],
 ) -> None:
+    """Print send metrics for a message type."""
+
     errors = metrics["error_types"]
 
     if errors:
@@ -217,6 +233,8 @@ def print_metrics(
 
 
 def main() -> int:
+    """Parse arguments, run the broadcast, and return an exit code."""
+
     parser = build_parser()
     args = parser.parse_args()
 
