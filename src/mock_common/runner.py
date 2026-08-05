@@ -6,6 +6,7 @@ from typing import Any
 
 from .recorder import Recorder
 
+
 LogCallback = Callable[[str], None]
 MetricsCallback = Callable[[str, dict[str, Any]], None]
 
@@ -51,6 +52,10 @@ class BroadcastRunner:
         self.metrics_callback = metrics_callback
         self._stop_requested = False
 
+    @property
+    def stop_requested(self) -> bool:
+        return self._stop_requested
+
     def stop(self) -> None:
         self._stop_requested = True
 
@@ -81,7 +86,6 @@ class BroadcastRunner:
             f"Encryption={str(self.encryption)}\n"
             f"Payload={self.payload_hex}\n"
         )
-
         return amf.encode("utf-8")
 
     def run(self) -> None:

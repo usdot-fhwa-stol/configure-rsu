@@ -5,14 +5,14 @@ from pathlib import Path
 from typing import Any
 
 from constants import PAYLOAD_DICT, PCAP_DIRECTORY
+from mock_common.config import (
+    MODE_NO_RSU,
+    MODE_USING_RSU,
+)
+from mock_common.runner import BroadcastRunner
 from utils import _normalise_hex
 
-from .broadcaster import BroadcastRunner
-
 MESSAGE_TYPES = ("MAP", "SPAT", "BSM", "SDSM")
-
-MODE_NO_RSU = "no-rsu"
-MODE_USING_RSU = "using-rsu"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -136,9 +136,7 @@ def validate_args(
         parser.error("Select at least one message type with --message.")
 
     if not args.no_record and not args.interface:
-        parser.error(
-            "A recording interface is required unless --no-record is used."
-        )
+        parser.error("A recording interface is required unless --no-record is used.")
 
     args.psid = psid
     args.payload = payload
@@ -200,8 +198,7 @@ def print_metrics(
 
     if errors:
         errors_text = "\n".join(
-            f"  {error_type}: {count}"
-            for error_type, count in sorted(errors.items())
+            f"  {error_type}: {count}" for error_type, count in sorted(errors.items())
         )
     else:
         errors_text = "None"

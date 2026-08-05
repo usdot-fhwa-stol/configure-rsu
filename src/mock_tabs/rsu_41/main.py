@@ -38,7 +38,7 @@ class Rsu41Tab(QWidget):
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
 
-        self._broadcast_thread: _BroadcastWorker | None = None
+        self._broadcast_thread: BroadcastWorker | None = None
 
         self._build_ui()
 
@@ -99,6 +99,12 @@ class Rsu41Tab(QWidget):
         self.psid_edit = _make_hex_edit("8002")
         self.psid_edit.setPlaceholderText("Example: 8002")
         form.addRow("PSID:", self.psid_edit)
+
+        self.priority_spin = _make_spinbox(7, 0, 255)
+        form.addRow("Priority:", self.priority_spin)
+
+        self.tx_channel_spin = _make_spinbox(172, 0, 255)
+        form.addRow("Tx Channel:", self.tx_channel_spin)
 
         self.signature_check = QCheckBox()
         form.addRow("Signature:", self.signature_check)
@@ -262,13 +268,15 @@ class Rsu41Tab(QWidget):
 
         self.metrics_display.clear()
 
-        self._broadcast_thread = _BroadcastWorker(
+        self._broadcast_thread = BroadcastWorker(
             target_ip=self.amf_rsu_edit.text().strip(),
             target_port=self.amf_port_spin.value(),
             selected_messages=self._selected_message_types(),
             frequency_hz=self.freq_spin.value(),
             period_seconds=self.period_spin.value(),
             psid=_normalise_hex(self.psid_edit.text()),
+            priority=self.prio,
+            tx_channel=self.tx_channel_spin.value(),
             payload_hex=_normalise_hex(self.payload_edit.text()),
             signature=self.signature_check.isChecked(),
             encryption=self.encryption_check.isChecked(),
@@ -280,9 +288,6 @@ class Rsu41Tab(QWidget):
         self._broadcast_thread.signals.log.connect(self._log)
         self._broadcast_thread.signals.error.connect(self._on_broadcast_error)
         self._broadcast_thread.signals.metrics_updated.connect(self._update_metrics)
-        self._broadcast_thread.signals.pcap_finished.connect(
-            lambda path: self._log(f"Recording complete: {path}")
-        )
         self._broadcast_thread.signals.finished.connect(self._on_broadcast_finished)
 
         self.start_stop_button.setText("Stop Broadcast")
@@ -340,7 +345,6 @@ class _StandaloneWindow(QMainWindow):
 
 
 def main() -> None:
-    """Launch the Mock RSU 4.1 GUI standalone (for local testing only)."""
     app = QApplication(sys.argv)
     window = _StandaloneWindow()
     window.show()

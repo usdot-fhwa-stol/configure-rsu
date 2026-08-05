@@ -63,14 +63,16 @@ class Recorder:
         if self.process.stderr is None:
             raise RuntimeError("Could not monitor tcpdump startup.")
 
+        process = self.process
         deadline = time.monotonic() + timeout
         startup_messages: list[str] = []
 
         while time.monotonic() < deadline:
-            return_code = self.process.poll()
+            return_code = process.poll()
 
             if return_code is not None:
-                remaining_output = self.process.stderr.read().strip()
+                remaining_output = process.stderr.read().strip()
+
                 if remaining_output:
                     startup_messages.append(remaining_output)
 
@@ -83,7 +85,7 @@ class Recorder:
                 )
 
             readable, _, _ = select.select(
-                [self.process.stderr],
+                [process.stderr],
                 [],
                 [],
                 0.1,
@@ -92,7 +94,7 @@ class Recorder:
             if not readable:
                 continue
 
-            line = self.process.stderr.readline()
+            line = process.stderr.readline()
             if not line:
                 continue
 
@@ -119,7 +121,6 @@ class Recorder:
 
         try:
             if process.poll() is None:
-                # SIGINT lets tcpdump flush packets and finalize the PCAP.
                 process.send_signal(signal.SIGINT)
 
                 try:
