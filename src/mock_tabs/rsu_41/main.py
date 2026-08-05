@@ -49,16 +49,18 @@ class Rsu41Tab(QWidget):
             self._broadcast_thread.wait(3000)
 
     def _on_target_mode_changed(self, selected_mode: str) -> None:
-        if selected_mode == "Using RSU":
+        using_rsu = selected_mode == "Using RSU"
+    
+        if using_rsu:
             self.amf_rsu_edit.setText("192.168.55.20")
-            self.prio = 3
-            self.tx_channel = 183
             self.recording_interface_edit.setText("enp60s0")
+            self.priority_spin.setValue(3)
+            self.tx_channel_spin.setValue(183)
         else:
             self.amf_rsu_edit.setText("127.0.0.1")
-            self.prio = 7
-            self.tx_channel = 172
             self.recording_interface_edit.setText("lo")
+            self.priority_spin.setValue(7)
+            self.tx_channel_spin.setValue(172)
 
     def _build_ui(self) -> None:
         main_layout = QVBoxLayout(self)
@@ -275,7 +277,7 @@ class Rsu41Tab(QWidget):
             frequency_hz=self.freq_spin.value(),
             period_seconds=self.period_spin.value(),
             psid=_normalise_hex(self.psid_edit.text()),
-            priority=self.prio,
+            priority=self.priority_spin.value(),
             tx_channel=self.tx_channel_spin.value(),
             payload_hex=_normalise_hex(self.payload_edit.text()),
             signature=self.signature_check.isChecked(),
