@@ -5,7 +5,7 @@ from PyQt6.QtCore import QObject, QThread, pyqtSignal
 from mock_common.runner import BroadcastRunner
 
 
-class BroadcastWorkerSignals(QObject):
+class LocalBroadcastWorkerSignals(QObject):
     """Signals emitted by `BroadcastWorker`."""
 
     log = pyqtSignal(str)
@@ -14,7 +14,7 @@ class BroadcastWorkerSignals(QObject):
     error = pyqtSignal(str)
 
 
-class BroadcastWorker(QThread):
+class LocalBroadcastWorker(QThread):
     """Send mock RSU 4.1 AMF messages without blocking the UI thread."""
 
     def __init__(
