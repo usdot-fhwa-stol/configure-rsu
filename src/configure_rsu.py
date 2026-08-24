@@ -5,63 +5,64 @@ import sys
 from binascii import unhexlify
 from typing import Any, Callable, Dict, List, Optional
 
-from PyQt6.QtCore import (
-    QObject, QRegularExpression, QRunnable, Qt, QThreadPool, pyqtSignal, pyqtSlot,
-)
-from PyQt6.QtGui import QBrush, QColor, QRegularExpressionValidator
-from PyQt6.QtWidgets import (
-    QAbstractItemView, QAbstractSpinBox, QApplication, QButtonGroup, QComboBox,
-    QDialog, QFormLayout, QGridLayout, QGroupBox, QHBoxLayout, QHeaderView,
-    QLabel, QLineEdit, QMainWindow, QMessageBox, QPushButton, QScrollArea,
-    QSpinBox, QTableWidget, QTableWidgetItem, QTabWidget, QTextEdit,
-    QVBoxLayout, QWidget,
-)
-
 from dotenv import load_dotenv
-from snmp import Engine, Timeout, ErrorResponse
+from PyQt6.QtCore import (
+    QObject,
+    QRunnable,
+    Qt,
+    QThreadPool,
+    pyqtSignal,
+    pyqtSlot,
+)
+from PyQt6.QtGui import QBrush, QColor
+from PyQt6.QtWidgets import (
+    QAbstractItemView,
+    QApplication,
+    QButtonGroup,
+    QComboBox,
+    QDialog,
+    QFormLayout,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QTableWidget,
+    QTableWidgetItem,
+    QTabWidget,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
+from snmp import Engine, ErrorResponse, Timeout
 from snmp.security.usm.auth import HmacMd5, HmacSha, HmacSha256, HmacSha512
-from snmp.security.usm.priv import DesCbc, AesCfb128
-from snmp.smi import OctetString, Integer32
+from snmp.security.usm.priv import AesCfb128, DesCbc
+from snmp.smi import Integer32, OctetString
 
-import cr_helper
+import src.cr_helper
+from src.constants import ALIGN_RIGHT
+from src.mock_tab.main import MockMessagesTab
+from src.utils import _make_hex_edit, _make_spinbox
 
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env'))
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), ".env"))
 
 # Initialize SNMP Engine
 snmp_engine = Engine()
 
 # Load SNMP credentials from environment variables
-IP_ADDRESS = os.getenv('IP_ADDRESS')
-SNMP_PORT = int(os.getenv('SNMP_PORT', 161))
-SNMP_USER = os.getenv('SNMP_USER')
-AUTH_PASSWORD = os.getenv('AUTH_PASSWORD')
-PRIV_PASSWORD = os.getenv('PRIV_PASSWORD')
-
-ALIGN_RIGHT = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-HEX_REGEX = QRegularExpression(r'^[0-9A-Fa-f]*$')
-
-
-def _hex_validator() -> QRegularExpressionValidator:
-    return QRegularExpressionValidator(HEX_REGEX)
-
-
-def _make_spinbox(value: int, lo: int, hi: int, readonly: bool = False) -> QSpinBox:
-    sb = QSpinBox()
-    sb.setRange(lo, hi)
-    sb.setValue(value)
-    if readonly:
-        sb.setReadOnly(True)
-        sb.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
-    return sb
-
-
-def _make_hex_edit(value: str = "") -> QLineEdit:
-    le = QLineEdit(value)
-    le.setValidator(_hex_validator())
-    return le
-
+IP_ADDRESS = os.getenv("IP_ADDRESS")
+SNMP_PORT = int(os.getenv("SNMP_PORT", 161))
+SNMP_USER = os.getenv("SNMP_USER")
+AUTH_PASSWORD = os.getenv("AUTH_PASSWORD")
+PRIV_PASSWORD = os.getenv("PRIV_PASSWORD")
 
 # ---------- Async worker plumbing ----------
+
 
 class _TaskSignals(QObject):
     finished = pyqtSignal(object)
@@ -114,6 +115,8 @@ class RSUConfigurationApp(QMainWindow):
         self._create_transmitted_message_forward_tab()
         self._create_store_and_repeat_tab()
         self._create_active_message_tab()
+        self.rsu_tab = Rsu41Tab()
+        self.tabs.addTab(self.rsu_tab, "RSU 4.1 Mock Messages")
 
     # ---------- Mode MIB helpers ----------
     def _set_mode_mib(self, value: str) -> None:
@@ -175,7 +178,9 @@ class RSUConfigurationApp(QMainWindow):
         self.auth_protocol_combo.setCurrentText("SHA")
         form.addRow("Auth Protocol:", self.auth_protocol_combo)
 
-        self.auth_password_edit = QLineEdit(AUTH_PASSWORD if AUTH_PASSWORD else "authpass")
+        self.auth_password_edit = QLineEdit(
+            AUTH_PASSWORD if AUTH_PASSWORD else "authpass"
+        )
         self.auth_password_edit.setEchoMode(QLineEdit.EchoMode.Password)
         form.addRow("Auth Password:", self.auth_password_edit)
 
@@ -185,7 +190,9 @@ class RSUConfigurationApp(QMainWindow):
         self.privacy_protocol_combo.setCurrentText("AES")
         form.addRow("Privacy Protocol:", self.privacy_protocol_combo)
 
-        self.privacy_password_edit = QLineEdit(PRIV_PASSWORD if PRIV_PASSWORD else "privpass")
+        self.privacy_password_edit = QLineEdit(
+            PRIV_PASSWORD if PRIV_PASSWORD else "privpass"
+        )
         self.privacy_password_edit.setEchoMode(QLineEdit.EchoMode.Password)
         form.addRow("Privacy Password:", self.privacy_password_edit)
 
@@ -270,7 +277,9 @@ class RSUConfigurationApp(QMainWindow):
         return table
 
     @staticmethod
-    def _fill_error_row(table: QTableWidget, row: int, err: str, data_cols: int) -> None:
+    def _fill_error_row(
+        table: QTableWidget, row: int, err: str, data_cols: int
+    ) -> None:
         item = QTableWidgetItem(f"error retrieving info: {err}")
         item.setForeground(QBrush(QColor("#b00020")))
         table.setItem(row, 1, item)
@@ -310,28 +319,30 @@ class RSUConfigurationApp(QMainWindow):
         def update_field_states() -> None:
             is_ntcip = self.mode_mib == "ntcip1218"
             for entry in ifm_entries:
-                for w in entry.get('ntcip_widgets', []):
+                for w in entry.get("ntcip_widgets", []):
                     w.setEnabled(is_ntcip)
-                for w in entry.get('rsu41_widgets', []):
+                for w in entry.get("rsu41_widgets", []):
                     w.setEnabled(not is_ntcip)
 
         def set_single_ifm_entry(entry_vars: dict) -> None:
-            ifm_index = entry_vars['index_spin'].value()
-            psid = entry_vars['psid_edit'].text().strip()
-            channel = entry_vars['channel_spin'].value()
-            enable = entry_vars['enable_spin'].value()
+            ifm_index = entry_vars["index_spin"].value()
+            psid = entry_vars["psid_edit"].text().strip()
+            channel = entry_vars["channel_spin"].value()
+            enable = entry_vars["enable_spin"].value()
             if not psid:
-                QMessageBox.critical(self, "Validation Error", f"Entry {ifm_index}: PSID cannot be empty")
+                QMessageBox.critical(
+                    self, "Validation Error", f"Entry {ifm_index}: PSID cannot be empty"
+                )
                 return
 
             if self.mode_mib == "ntcip1218":
-                priority = entry_vars['priority_spin'].value()
-                options = entry_vars['options_edit'].text().strip()
-                payload = entry_vars['payload_edit'].text().strip()
+                priority = entry_vars["priority_spin"].value()
+                options = entry_vars["options_edit"].text().strip()
+                payload = entry_vars["payload_edit"].text().strip()
                 mode_mib = "ntcip1218"
             else:
-                dsrc_msg_id = entry_vars['dsrc_msg_id_spin'].value()
-                tx_mode = entry_vars['tx_mode_spin'].value()
+                dsrc_msg_id = entry_vars["dsrc_msg_id_spin"].value()
+                tx_mode = entry_vars["tx_mode_spin"].value()
                 mode_mib = "rsu41"
 
             def work():
@@ -361,30 +372,43 @@ class RSUConfigurationApp(QMainWindow):
                 self._set_operate()
 
             def on_ok(_):
-                QMessageBox.information(self, "Success", f"Successfully configured IFM entry {ifm_index} with PSID {psid}")
+                QMessageBox.information(
+                    self,
+                    "Success",
+                    f"Successfully configured IFM entry {ifm_index} with PSID {psid}",
+                )
                 get_ifm_info()
 
             def on_err(e):
-                QMessageBox.critical(self, "SNMP Error", f"Failed to set IFM entry {ifm_index}: {e}")
+                QMessageBox.critical(
+                    self, "SNMP Error", f"Failed to set IFM entry {ifm_index}: {e}"
+                )
 
             self._run_async(work, on_ok, on_err)
 
         def remove_ifm_entry(entry_vars: dict) -> None:
-            frame = entry_vars['frame']
+            frame = entry_vars["frame"]
             config_inner_layout.removeWidget(frame)
             frame.setParent(None)
             frame.deleteLater()
             ifm_entries.remove(entry_vars)
             for entry in ifm_entries:
-                entry['frame'].setTitle(f"IFM Entry {entry['index_spin'].value()}")
+                entry["frame"].setTitle(f"IFM Entry {entry['index_spin'].value()}")
 
         def add_ifm_entry() -> None:
-            default_index = (ifm_entries[-1]['index_spin'].value() + 1) if ifm_entries else 1
+            default_index = (
+                (ifm_entries[-1]["index_spin"].value() + 1) if ifm_entries else 1
+            )
             default_psid = (
-                '8002' if default_index == 1 else
-                '8003' if default_index == 2 else
-                '8010' if default_index == 3 else
-                '0027' if default_index == 4 else 'E0000017'
+                "8002"
+                if default_index == 1
+                else "8003"
+                if default_index == 2
+                else "8010"
+                if default_index == 3
+                else "0027"
+                if default_index == 4
+                else "E0000017"
             )
             default_channel = 180 if self.mode_mib == "rsu41" else 183
 
@@ -444,23 +468,21 @@ class RSUConfigurationApp(QMainWindow):
             grid.setColumnStretch(3, 1)
 
             entry_vars = {
-                'frame': frame,
-                'index_spin': index_spin,
-                'psid_edit': psid_edit,
-                'channel_spin': channel_spin,
-                'enable_spin': enable_spin,
-                'dsrc_msg_id_spin': dsrc_spin,
-                'tx_mode_spin': txmode_spin,
-                'priority_spin': priority_spin,
-                'options_edit': options_edit,
-                'payload_edit': payload_edit,
-                'ntcip_widgets': [priority_spin, options_edit, payload_edit],
-                'rsu41_widgets': [dsrc_spin, txmode_spin],
+                "frame": frame,
+                "index_spin": index_spin,
+                "psid_edit": psid_edit,
+                "channel_spin": channel_spin,
+                "enable_spin": enable_spin,
+                "dsrc_msg_id_spin": dsrc_spin,
+                "tx_mode_spin": txmode_spin,
+                "priority_spin": priority_spin,
+                "options_edit": options_edit,
+                "payload_edit": payload_edit,
+                "ntcip_widgets": [priority_spin, options_edit, payload_edit],
+                "rsu41_widgets": [dsrc_spin, txmode_spin],
             }
 
-            index_spin.valueChanged.connect(
-                lambda v: frame.setTitle(f"IFM Entry {v}")
-            )
+            index_spin.valueChanged.connect(lambda v: frame.setTitle(f"IFM Entry {v}"))
             set_btn.clicked.connect(lambda: set_single_ifm_entry(entry_vars))
             remove_btn.clicked.connect(lambda: remove_ifm_entry(entry_vars))
 
@@ -479,7 +501,8 @@ class RSUConfigurationApp(QMainWindow):
             add_ifm_btn.setEnabled(True)
             base_oid = (
                 "1.3.6.1.4.1.1206.4.2.18.4.2.1"
-                if self.mode_mib == "ntcip1218" else "1.0.15628.4.1.5.1"
+                if self.mode_mib == "ntcip1218"
+                else "1.0.15628.4.1.5.1"
             )
 
             def work():
@@ -488,7 +511,9 @@ class RSUConfigurationApp(QMainWindow):
                 for i in range(1, 7):
                     try:
                         handle = session.get(f"{base_oid}.2.{i}")
-                        varbind_list = handle.wait() if hasattr(handle, 'wait') else handle
+                        varbind_list = (
+                            handle.wait() if hasattr(handle, "wait") else handle
+                        )
                         value = cr_helper.format_snmp_value(varbind_list[0])
                         results.append((i, value, None))
                     except (Timeout, ErrorResponse) as e:
@@ -504,7 +529,9 @@ class RSUConfigurationApp(QMainWindow):
                     if err is None:
                         ifm_table.setItem(row, 1, QTableWidgetItem(value))
                         btn = QPushButton("Destroy")
-                        btn.clicked.connect(lambda _c=False, ii=i: destroy_ifm_entry(ii))
+                        btn.clicked.connect(
+                            lambda _c=False, ii=i: destroy_ifm_entry(ii)
+                        )
                         ifm_table.setCellWidget(row, 2, btn)
                     else:
                         self._fill_error_row(ifm_table, row, err, data_cols=1)
@@ -524,7 +551,11 @@ class RSUConfigurationApp(QMainWindow):
         get_btn.clicked.connect(get_ifm_info)
         controls.addWidget(get_btn)
         help_btn = QPushButton("Help")
-        help_btn.clicked.connect(lambda: self._show_help("Immediate Forward", cr_helper.get_ifm_help_content()))
+        help_btn.clicked.connect(
+            lambda: self._show_help(
+                "Immediate Forward", cr_helper.get_ifm_help_content()
+            )
+        )
         controls.addWidget(help_btn)
         controls.addStretch(1)
 
@@ -552,37 +583,47 @@ class RSUConfigurationApp(QMainWindow):
 
         results_group = QGroupBox("RFM Results")
         results_layout = QVBoxLayout(results_group)
-        rfm_table = self._make_results_table(["Index", "PSID", "Dest IP", "Dest Port", ""])
+        rfm_table = self._make_results_table(
+            ["Index", "PSID", "Dest IP", "Dest Port", ""]
+        )
         results_layout.addWidget(rfm_table)
         outer.addWidget(results_group, 1)
 
         rfm_entries: List[dict] = []
 
         def set_single_rfm_entry(entry_vars: dict) -> None:
-            rfm_index = entry_vars['index_spin'].value()
-            psid = entry_vars['psid_edit'].text().strip()
-            dest_ip = entry_vars['dest_ip_edit'].text().strip()
-            dest_port = entry_vars['dest_port_spin'].value()
-            protocol = int(entry_vars['protocol_combo'].currentText())
-            rssi = entry_vars['rssi_spin'].value()
-            interval = entry_vars['interval_spin'].value()
-            start_date = entry_vars['start_date_edit'].text().strip()
-            stop_date = entry_vars['stop_date_edit'].text().strip()
-            secure = entry_vars['secure_spin'].value()
-            auth_interval = entry_vars['auth_interval_spin'].value()
+            rfm_index = entry_vars["index_spin"].value()
+            psid = entry_vars["psid_edit"].text().strip()
+            dest_ip = entry_vars["dest_ip_edit"].text().strip()
+            dest_port = entry_vars["dest_port_spin"].value()
+            protocol = int(entry_vars["protocol_combo"].currentText())
+            rssi = entry_vars["rssi_spin"].value()
+            interval = entry_vars["interval_spin"].value()
+            start_date = entry_vars["start_date_edit"].text().strip()
+            stop_date = entry_vars["stop_date_edit"].text().strip()
+            secure = entry_vars["secure_spin"].value()
+            auth_interval = entry_vars["auth_interval_spin"].value()
 
             if not psid:
-                QMessageBox.critical(self, "Validation Error", f"Entry {rfm_index}: PSID cannot be empty")
+                QMessageBox.critical(
+                    self, "Validation Error", f"Entry {rfm_index}: PSID cannot be empty"
+                )
                 return
             if not dest_ip:
-                QMessageBox.critical(self, "Validation Error", f"Entry {rfm_index}: Destination IP cannot be empty")
+                QMessageBox.critical(
+                    self,
+                    "Validation Error",
+                    f"Entry {rfm_index}: Destination IP cannot be empty",
+                )
                 return
 
             try:
                 start_date_bytes = cr_helper.convert_datetime_to_snmp(start_date)
                 stop_date_bytes = cr_helper.convert_datetime_to_snmp(stop_date)
             except ValueError as e:
-                QMessageBox.critical(self, "Validation Error", f"Entry {rfm_index}: {e}")
+                QMessageBox.critical(
+                    self, "Validation Error", f"Entry {rfm_index}: {e}"
+                )
                 return
 
             def work():
@@ -605,26 +646,34 @@ class RSUConfigurationApp(QMainWindow):
                 self._set_operate()
 
             def on_ok(_):
-                QMessageBox.information(self, "Success", f"Successfully configured RFM entry {rfm_index} with PSID {psid}")
+                QMessageBox.information(
+                    self,
+                    "Success",
+                    f"Successfully configured RFM entry {rfm_index} with PSID {psid}",
+                )
                 get_rfm_info()
 
             def on_err(e):
-                QMessageBox.critical(self, "SNMP Error", f"Failed to set RFM entry {rfm_index}: {e}")
+                QMessageBox.critical(
+                    self, "SNMP Error", f"Failed to set RFM entry {rfm_index}: {e}"
+                )
 
             self._run_async(work, on_ok, on_err)
 
         def remove_rfm_entry(entry_vars: dict) -> None:
-            frame = entry_vars['frame']
+            frame = entry_vars["frame"]
             config_inner_layout.removeWidget(frame)
             frame.setParent(None)
             frame.deleteLater()
             rfm_entries.remove(entry_vars)
             for entry in rfm_entries:
-                entry['frame'].setTitle(f"RFM Entry {entry['index_spin'].value()}")
+                entry["frame"].setTitle(f"RFM Entry {entry['index_spin'].value()}")
 
         def add_rfm_entry() -> None:
-            default_index = (rfm_entries[-1]['index_spin'].value() + 1) if rfm_entries else 1
-            default_psid = '8002' if default_index == 1 else '8003'
+            default_index = (
+                (rfm_entries[-1]["index_spin"].value() + 1) if rfm_entries else 1
+            )
+            default_psid = "8002" if default_index == 1 else "8003"
 
             frame = QGroupBox(f"RFM Entry {default_index}")
             grid = QGridLayout(frame)
@@ -686,23 +735,21 @@ class RSUConfigurationApp(QMainWindow):
             grid.setColumnStretch(3, 1)
 
             entry_vars = {
-                'frame': frame,
-                'index_spin': index_spin,
-                'psid_edit': psid_edit,
-                'dest_ip_edit': dest_ip_edit,
-                'dest_port_spin': dest_port_spin,
-                'protocol_combo': protocol_combo,
-                'rssi_spin': rssi_spin,
-                'interval_spin': interval_spin,
-                'secure_spin': secure_spin,
-                'start_date_edit': start_date_edit,
-                'stop_date_edit': stop_date_edit,
-                'auth_interval_spin': auth_interval_spin,
+                "frame": frame,
+                "index_spin": index_spin,
+                "psid_edit": psid_edit,
+                "dest_ip_edit": dest_ip_edit,
+                "dest_port_spin": dest_port_spin,
+                "protocol_combo": protocol_combo,
+                "rssi_spin": rssi_spin,
+                "interval_spin": interval_spin,
+                "secure_spin": secure_spin,
+                "start_date_edit": start_date_edit,
+                "stop_date_edit": stop_date_edit,
+                "auth_interval_spin": auth_interval_spin,
             }
 
-            index_spin.valueChanged.connect(
-                lambda v: frame.setTitle(f"RFM Entry {v}")
-            )
+            index_spin.valueChanged.connect(lambda v: frame.setTitle(f"RFM Entry {v}"))
             set_btn.clicked.connect(lambda: set_single_rfm_entry(entry_vars))
             remove_btn.clicked.connect(lambda: remove_rfm_entry(entry_vars))
 
@@ -723,8 +770,12 @@ class RSUConfigurationApp(QMainWindow):
                     try:
                         values = []
                         for j in (2, 3, 4):
-                            handle = session.get(f"1.3.6.1.4.1.1206.4.2.18.5.2.1.{j}.{i}")
-                            varbind_list = handle.wait() if hasattr(handle, 'wait') else handle
+                            handle = session.get(
+                                f"1.3.6.1.4.1.1206.4.2.18.5.2.1.{j}.{i}"
+                            )
+                            varbind_list = (
+                                handle.wait() if hasattr(handle, "wait") else handle
+                            )
                             values.append(cr_helper.format_snmp_value(varbind_list[0]))
                         results.append((i, values, None))
                     except (Timeout, ErrorResponse) as e:
@@ -741,7 +792,9 @@ class RSUConfigurationApp(QMainWindow):
                         for col, v in enumerate(values, start=1):
                             rfm_table.setItem(row, col, QTableWidgetItem(v))
                         btn = QPushButton("Destroy")
-                        btn.clicked.connect(lambda _c=False, ii=i: destroy_rfm_entry(ii))
+                        btn.clicked.connect(
+                            lambda _c=False, ii=i: destroy_rfm_entry(ii)
+                        )
                         rfm_table.setCellWidget(row, 4, btn)
                     else:
                         self._fill_error_row(rfm_table, row, err, data_cols=3)
@@ -759,7 +812,11 @@ class RSUConfigurationApp(QMainWindow):
         get_btn.clicked.connect(get_rfm_info)
         controls.addWidget(get_btn)
         help_btn = QPushButton("Help")
-        help_btn.clicked.connect(lambda: self._show_help("Received Message Forward", cr_helper.get_rfm_help_content()))
+        help_btn.clicked.connect(
+            lambda: self._show_help(
+                "Received Message Forward", cr_helper.get_rfm_help_content()
+            )
+        )
         controls.addWidget(help_btn)
         controls.addStretch(1)
 
@@ -787,34 +844,44 @@ class RSUConfigurationApp(QMainWindow):
 
         results_group = QGroupBox("RFM Results")
         results_layout = QVBoxLayout(results_group)
-        tfm_table = self._make_results_table(["Index", "PSID", "Dest IP", "Dest Port", ""])
+        tfm_table = self._make_results_table(
+            ["Index", "PSID", "Dest IP", "Dest Port", ""]
+        )
         results_layout.addWidget(tfm_table)
         outer.addWidget(results_group, 1)
 
         tfm_entries: List[dict] = []
 
         def set_single_tfm_entry(entry_vars: dict) -> None:
-            tfm_index = entry_vars['index_spin'].value()
-            psid = entry_vars['psid_edit'].text().strip()
-            dest_ip = entry_vars['dest_ip_edit'].text().strip()
-            dest_port = entry_vars['dest_port_spin'].value()
-            protocol = int(entry_vars['protocol_combo'].currentText())
-            start_date = entry_vars['start_date_edit'].text().strip()
-            stop_date = entry_vars['stop_date_edit'].text().strip()
-            secure = entry_vars['secure_spin'].value()
+            tfm_index = entry_vars["index_spin"].value()
+            psid = entry_vars["psid_edit"].text().strip()
+            dest_ip = entry_vars["dest_ip_edit"].text().strip()
+            dest_port = entry_vars["dest_port_spin"].value()
+            protocol = int(entry_vars["protocol_combo"].currentText())
+            start_date = entry_vars["start_date_edit"].text().strip()
+            stop_date = entry_vars["stop_date_edit"].text().strip()
+            secure = entry_vars["secure_spin"].value()
 
             if not psid:
-                QMessageBox.critical(self, "Validation Error", f"Entry {tfm_index}: PSID cannot be empty")
+                QMessageBox.critical(
+                    self, "Validation Error", f"Entry {tfm_index}: PSID cannot be empty"
+                )
                 return
             if not dest_ip:
-                QMessageBox.critical(self, "Validation Error", f"Entry {tfm_index}: Destination IP cannot be empty")
+                QMessageBox.critical(
+                    self,
+                    "Validation Error",
+                    f"Entry {tfm_index}: Destination IP cannot be empty",
+                )
                 return
 
             try:
                 start_date_bytes = cr_helper.convert_datetime_to_snmp(start_date)
                 stop_date_bytes = cr_helper.convert_datetime_to_snmp(stop_date)
             except ValueError as e:
-                QMessageBox.critical(self, "Validation Error", f"Entry {tfm_index}: {e}")
+                QMessageBox.critical(
+                    self, "Validation Error", f"Entry {tfm_index}: {e}"
+                )
                 return
 
             def work():
@@ -822,38 +889,58 @@ class RSUConfigurationApp(QMainWindow):
                 session = self._get_session()
                 base_oid = "1.3.6.1.4.1.1206.4.2.18.20.2.1"
                 session.set(
-                    (f"{base_oid}.2.{tfm_index}", OctetString(unhexlify(psid))), # PSID
-                    (f"{base_oid}.3.{tfm_index}", OctetString(dest_ip.encode())), # Dest IP
-                    (f"{base_oid}.4.{tfm_index}", Integer32(dest_port)), # Dest Port
-                    (f"{base_oid}.5.{tfm_index}", Integer32(protocol)), # Protocol
-                    (f"{base_oid}.6.{tfm_index}", OctetString(start_date_bytes)), # Start Date
-                    (f"{base_oid}.7.{tfm_index}", OctetString(stop_date_bytes)), # Stop Date
-                    (f"{base_oid}.8.{tfm_index}", Integer32(secure)), # Secure
-                    (f"{base_oid}.9.{tfm_index}", Integer32(4)), # Status (4 = createAndGo)
+                    (f"{base_oid}.2.{tfm_index}", OctetString(unhexlify(psid))),  # PSID
+                    (
+                        f"{base_oid}.3.{tfm_index}",
+                        OctetString(dest_ip.encode()),
+                    ),  # Dest IP
+                    (f"{base_oid}.4.{tfm_index}", Integer32(dest_port)),  # Dest Port
+                    (f"{base_oid}.5.{tfm_index}", Integer32(protocol)),  # Protocol
+                    (
+                        f"{base_oid}.6.{tfm_index}",
+                        OctetString(start_date_bytes),
+                    ),  # Start Date
+                    (
+                        f"{base_oid}.7.{tfm_index}",
+                        OctetString(stop_date_bytes),
+                    ),  # Stop Date
+                    (f"{base_oid}.8.{tfm_index}", Integer32(secure)),  # Secure
+                    (
+                        f"{base_oid}.9.{tfm_index}",
+                        Integer32(4),
+                    ),  # Status (4 = createAndGo)
                 )
                 self._set_operate()
 
             def on_ok(_):
-                QMessageBox.information(self, "Success", f"Successfully configured TFM entry {tfm_index} with PSID {psid}")
+                QMessageBox.information(
+                    self,
+                    "Success",
+                    f"Successfully configured TFM entry {tfm_index} with PSID {psid}",
+                )
                 get_tfm_info()
 
             def on_err(e):
-                QMessageBox.critical(self, "SNMP Error", f"Failed to set TFM entry {tfm_index}: {e}")
+                QMessageBox.critical(
+                    self, "SNMP Error", f"Failed to set TFM entry {tfm_index}: {e}"
+                )
 
             self._run_async(work, on_ok, on_err)
 
         def remove_tfm_entry(entry_vars: dict) -> None:
-            frame = entry_vars['frame']
+            frame = entry_vars["frame"]
             config_inner_layout.removeWidget(frame)
             frame.setParent(None)
             frame.deleteLater()
             tfm_entries.remove(entry_vars)
             for entry in tfm_entries:
-                entry['frame'].setTitle(f"TFM Entry {entry['index_spin'].value()}")
+                entry["frame"].setTitle(f"TFM Entry {entry['index_spin'].value()}")
 
         def add_tfm_entry() -> None:
-            default_index = (tfm_entries[-1]['index_spin'].value() + 1) if tfm_entries else 1
-            default_psid = '8002' if default_index == 1 else '8003'
+            default_index = (
+                (tfm_entries[-1]["index_spin"].value() + 1) if tfm_entries else 1
+            )
+            default_psid = "8002" if default_index == 1 else "8003"
 
             frame = QGroupBox(f"TFM Entry {default_index}")
             grid = QGridLayout(frame)
@@ -904,20 +991,18 @@ class RSUConfigurationApp(QMainWindow):
             grid.setColumnStretch(3, 1)
 
             entry_vars = {
-                'frame': frame,
-                'index_spin': index_spin,
-                'psid_edit': psid_edit,
-                'dest_ip_edit': dest_ip_edit,
-                'dest_port_spin': dest_port_spin,
-                'protocol_combo': protocol_combo,
-                'secure_spin': secure_spin,
-                'start_date_edit': start_date_edit,
-                'stop_date_edit': stop_date_edit,
+                "frame": frame,
+                "index_spin": index_spin,
+                "psid_edit": psid_edit,
+                "dest_ip_edit": dest_ip_edit,
+                "dest_port_spin": dest_port_spin,
+                "protocol_combo": protocol_combo,
+                "secure_spin": secure_spin,
+                "start_date_edit": start_date_edit,
+                "stop_date_edit": stop_date_edit,
             }
 
-            index_spin.valueChanged.connect(
-                lambda v: frame.setTitle(f"TFM Entry {v}")
-            )
+            index_spin.valueChanged.connect(lambda v: frame.setTitle(f"TFM Entry {v}"))
             set_btn.clicked.connect(lambda: set_single_tfm_entry(entry_vars))
             remove_btn.clicked.connect(lambda: remove_tfm_entry(entry_vars))
 
@@ -938,8 +1023,12 @@ class RSUConfigurationApp(QMainWindow):
                     try:
                         values = []
                         for j in (2, 3, 4):
-                            handle = session.get(f"1.3.6.1.4.1.1206.4.2.18.20.2.1.{j}.{i}")
-                            varbind_list = handle.wait() if hasattr(handle, 'wait') else handle
+                            handle = session.get(
+                                f"1.3.6.1.4.1.1206.4.2.18.20.2.1.{j}.{i}"
+                            )
+                            varbind_list = (
+                                handle.wait() if hasattr(handle, "wait") else handle
+                            )
                             values.append(cr_helper.format_snmp_value(varbind_list[0]))
                         results.append((i, values, None))
                     except (Timeout, ErrorResponse) as e:
@@ -956,7 +1045,9 @@ class RSUConfigurationApp(QMainWindow):
                         for col, v in enumerate(values, start=1):
                             tfm_table.setItem(row, col, QTableWidgetItem(v))
                         btn = QPushButton("Destroy")
-                        btn.clicked.connect(lambda _c=False, ii=i: destroy_tfm_entry(ii))
+                        btn.clicked.connect(
+                            lambda _c=False, ii=i: destroy_tfm_entry(ii)
+                        )
                         tfm_table.setCellWidget(row, 4, btn)
                     else:
                         self._fill_error_row(tfm_table, row, err, data_cols=3)
@@ -974,12 +1065,15 @@ class RSUConfigurationApp(QMainWindow):
         get_btn.clicked.connect(get_tfm_info)
         controls.addWidget(get_btn)
         help_btn = QPushButton("Help")
-        help_btn.clicked.connect(lambda: self._show_help("Transmitted Message Forward", cr_helper.get_tfm_help_content()))
+        help_btn.clicked.connect(
+            lambda: self._show_help(
+                "Transmitted Message Forward", cr_helper.get_tfm_help_content()
+            )
+        )
         controls.addWidget(help_btn)
         controls.addStretch(1)
 
         self.tabs.addTab(tab, "Transmitted Message Forward")
-
 
     # ---------- Store-and-Repeat tab ----------
     def _create_store_and_repeat_tab(self) -> None:
@@ -1023,8 +1117,12 @@ class RSUConfigurationApp(QMainWindow):
                     try:
                         values = []
                         for j in (2, 7):  # psid and payload
-                            handle = session.get(f"1.3.6.1.4.1.1206.4.2.18.3.2.1.{j}.{i}")
-                            varbind_list = handle.wait() if hasattr(handle, 'wait') else handle
+                            handle = session.get(
+                                f"1.3.6.1.4.1.1206.4.2.18.3.2.1.{j}.{i}"
+                            )
+                            varbind_list = (
+                                handle.wait() if hasattr(handle, "wait") else handle
+                            )
                             values.append(cr_helper.format_snmp_value(varbind_list[0]))
                         results.append((i, values, None))
                     except (Timeout, ErrorResponse) as e:
@@ -1041,7 +1139,9 @@ class RSUConfigurationApp(QMainWindow):
                         for col, v in enumerate(values, start=1):
                             srm_table.setItem(row, col, QTableWidgetItem(v))
                         btn = QPushButton("Destroy")
-                        btn.clicked.connect(lambda _c=False, ii=i: destroy_srm_entry(ii))
+                        btn.clicked.connect(
+                            lambda _c=False, ii=i: destroy_srm_entry(ii)
+                        )
                         srm_table.setCellWidget(row, 3, btn)
                     else:
                         self._fill_error_row(srm_table, row, err, data_cols=2)
@@ -1052,29 +1152,37 @@ class RSUConfigurationApp(QMainWindow):
             self._run_async(work, on_ok, on_err)
 
         def set_single_srm_entry(entry_vars: dict) -> None:
-            srm_index = entry_vars['index_spin'].value()
-            psid = entry_vars['psid_edit'].text().strip()
-            channel = entry_vars['channel_spin'].value()
-            interval = entry_vars['interval_spin'].value()
-            start_date = entry_vars['start_date_edit'].text().strip()
-            stop_date = entry_vars['stop_date_edit'].text().strip()
-            payload = entry_vars['payload_edit'].text().strip()
-            enable = entry_vars['enable_spin'].value()
-            priority = entry_vars['priority_spin'].value()
-            options = entry_vars['options_edit'].text().strip()
+            srm_index = entry_vars["index_spin"].value()
+            psid = entry_vars["psid_edit"].text().strip()
+            channel = entry_vars["channel_spin"].value()
+            interval = entry_vars["interval_spin"].value()
+            start_date = entry_vars["start_date_edit"].text().strip()
+            stop_date = entry_vars["stop_date_edit"].text().strip()
+            payload = entry_vars["payload_edit"].text().strip()
+            enable = entry_vars["enable_spin"].value()
+            priority = entry_vars["priority_spin"].value()
+            options = entry_vars["options_edit"].text().strip()
 
             if not psid:
-                QMessageBox.critical(self, "Validation Error", f"Entry {srm_index}: PSID cannot be empty")
+                QMessageBox.critical(
+                    self, "Validation Error", f"Entry {srm_index}: PSID cannot be empty"
+                )
                 return
             if not payload:
-                QMessageBox.critical(self, "Validation Error", f"Entry {srm_index}: Payload cannot be empty")
+                QMessageBox.critical(
+                    self,
+                    "Validation Error",
+                    f"Entry {srm_index}: Payload cannot be empty",
+                )
                 return
 
             try:
                 start_date_bytes = cr_helper.convert_datetime_to_snmp(start_date)
                 stop_date_bytes = cr_helper.convert_datetime_to_snmp(stop_date)
             except ValueError as e:
-                QMessageBox.critical(self, "Validation Error", f"Entry {srm_index}: {e}")
+                QMessageBox.critical(
+                    self, "Validation Error", f"Entry {srm_index}: {e}"
+                )
                 return
 
             def work():
@@ -1096,25 +1204,33 @@ class RSUConfigurationApp(QMainWindow):
                 self._set_operate()
 
             def on_ok(_):
-                QMessageBox.information(self, "Success", f"Successfully configured SRM entry {srm_index} with PSID {psid}")
+                QMessageBox.information(
+                    self,
+                    "Success",
+                    f"Successfully configured SRM entry {srm_index} with PSID {psid}",
+                )
                 get_srm_info()
 
             def on_err(e):
-                QMessageBox.critical(self, "SNMP Error", f"Failed to set SRM entry {srm_index}: {e}")
+                QMessageBox.critical(
+                    self, "SNMP Error", f"Failed to set SRM entry {srm_index}: {e}"
+                )
 
             self._run_async(work, on_ok, on_err)
 
         def remove_srm_entry(entry_vars: dict) -> None:
-            frame = entry_vars['frame']
+            frame = entry_vars["frame"]
             config_inner_layout.removeWidget(frame)
             frame.setParent(None)
             frame.deleteLater()
             srm_entries.remove(entry_vars)
             for entry in srm_entries:
-                entry['frame'].setTitle(f"SRM Entry {entry['index_spin'].value()}")
+                entry["frame"].setTitle(f"SRM Entry {entry['index_spin'].value()}")
 
         def add_srm_entry() -> None:
-            default_index = (srm_entries[-1]['index_spin'].value() + 1) if srm_entries else 1
+            default_index = (
+                (srm_entries[-1]["index_spin"].value() + 1) if srm_entries else 1
+            )
             default_channel = 180 if self.mode_mib == "rsu41" else 183
 
             frame = QGroupBox(f"SRM Entry {default_index}")
@@ -1172,22 +1288,20 @@ class RSUConfigurationApp(QMainWindow):
             grid.setColumnStretch(3, 1)
 
             entry_vars = {
-                'frame': frame,
-                'index_spin': index_spin,
-                'psid_edit': psid_edit,
-                'channel_spin': channel_spin,
-                'interval_spin': interval_spin,
-                'start_date_edit': start_date_edit,
-                'stop_date_edit': stop_date_edit,
-                'payload_edit': payload_edit,
-                'enable_spin': enable_spin,
-                'priority_spin': priority_spin,
-                'options_edit': options_edit,
+                "frame": frame,
+                "index_spin": index_spin,
+                "psid_edit": psid_edit,
+                "channel_spin": channel_spin,
+                "interval_spin": interval_spin,
+                "start_date_edit": start_date_edit,
+                "stop_date_edit": stop_date_edit,
+                "payload_edit": payload_edit,
+                "enable_spin": enable_spin,
+                "priority_spin": priority_spin,
+                "options_edit": options_edit,
             }
 
-            index_spin.valueChanged.connect(
-                lambda v: frame.setTitle(f"SRM Entry {v}")
-            )
+            index_spin.valueChanged.connect(lambda v: frame.setTitle(f"SRM Entry {v}"))
             set_btn.clicked.connect(lambda: set_single_srm_entry(entry_vars))
             remove_btn.clicked.connect(lambda: remove_srm_entry(entry_vars))
 
@@ -1202,7 +1316,11 @@ class RSUConfigurationApp(QMainWindow):
         get_btn.clicked.connect(get_srm_info)
         controls.addWidget(get_btn)
         help_btn = QPushButton("Help")
-        help_btn.clicked.connect(lambda: self._show_help("Store-and-Repeat", cr_helper.get_srm_help_content()))
+        help_btn.clicked.connect(
+            lambda: self._show_help(
+                "Store-and-Repeat", cr_helper.get_srm_help_content()
+            )
+        )
         controls.addWidget(help_btn)
         controls.addStretch(1)
 
@@ -1227,7 +1345,9 @@ class RSUConfigurationApp(QMainWindow):
 
         self.msg_type_combo = QComboBox()
         self.msg_type_combo.setEditable(True)
-        self.msg_type_combo.addItems(["MAP", "SPAT", "BSM", "SRM", "SSM", "TIM", "PSM", "RSM", "SDSM"])
+        self.msg_type_combo.addItems(
+            ["MAP", "SPAT", "BSM", "SRM", "SSM", "TIM", "PSM", "RSM", "SDSM"]
+        )
         self.msg_type_combo.setCurrentText("MAP")
         form.addRow("Message Type:", self.msg_type_combo)
 
@@ -1280,17 +1400,29 @@ class RSUConfigurationApp(QMainWindow):
                     f"Encryption={self.encryption_combo.currentText()}\n"
                     f"Payload={self.payload_edit.text()}"
                 )
-                hex_data = amf.encode('utf-8')
+                hex_data = amf.encode("utf-8")
                 sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                sk.sendto(hex_data, (self.amf_rsu_edit.text(), self.amf_port_spin.value()))
-                QMessageBox.information(self, "AMF Sent", "Active Message File has been sent to the RSU.")
+                sk.sendto(
+                    hex_data, (self.amf_rsu_edit.text(), self.amf_port_spin.value())
+                )
+                QMessageBox.information(
+                    self, "AMF Sent", "Active Message File has been sent to the RSU."
+                )
             except Exception as e:
-                QMessageBox.critical(self, "Error Sending AMF", f"Failed to send Active Message File:\n{e}")
+                QMessageBox.critical(
+                    self,
+                    "Error Sending AMF",
+                    f"Failed to send Active Message File:\n{e}",
+                )
 
         button_row = QHBoxLayout()
         button_row.addStretch(1)
         help_btn = QPushButton("Help")
-        help_btn.clicked.connect(lambda: self._show_help("Send Active Message", cr_helper.get_amf_help_content()))
+        help_btn.clicked.connect(
+            lambda: self._show_help(
+                "Send Active Message", cr_helper.get_amf_help_content()
+            )
+        )
         button_row.addWidget(help_btn)
         send_btn = QPushButton("Send Message")
         send_btn.clicked.connect(send_amf)
@@ -1308,9 +1440,9 @@ class RSUConfigurationApp(QMainWindow):
             mode_oid = "1.0.15628.4.1.99.0"
         session = self._get_session()
         handle = session.get(mode_oid)
-        varbind_list = handle.wait() if hasattr(handle, 'wait') else handle
+        varbind_list = handle.wait() if hasattr(handle, "wait") else handle
         value_obj = varbind_list[0].value
-        return value_obj.value if hasattr(value_obj, 'value') else value_obj
+        return value_obj.value if hasattr(value_obj, "value") else value_obj
 
     def _set_rsu_mode(self, target: Dict[str, int]) -> None:
         if self.mode_mib == "ntcip1218":
@@ -1348,8 +1480,8 @@ class RSUConfigurationApp(QMainWindow):
     def _test_connection(self) -> None:
         def work():
             session = self._get_session()
-            handle = session.get('1.3.6.1.2.1.1.1.0')
-            varbind_list = handle.wait() if hasattr(handle, 'wait') else handle
+            handle = session.get("1.3.6.1.2.1.1.1.0")
+            varbind_list = handle.wait() if hasattr(handle, "wait") else handle
             return cr_helper.format_snmp_value(varbind_list[0])
 
         def on_ok(value):
@@ -1359,7 +1491,9 @@ class RSUConfigurationApp(QMainWindow):
             if isinstance(e, (Timeout, ErrorResponse)):
                 self._append_result(f"Connection test failed: {e}")
                 self._append_result("Check your credentials and device accessibility.")
-                QMessageBox.critical(self, "Connection Error", f"Failed to connect to device:\n{e}")
+                QMessageBox.critical(
+                    self, "Connection Error", f"Failed to connect to device:\n{e}"
+                )
             else:
                 QMessageBox.critical(self, "Error", str(e))
 
@@ -1372,9 +1506,9 @@ class RSUConfigurationApp(QMainWindow):
         def work():
             session = self._get_session()
             handle = session.get(mode_status_oid)
-            varbind_list = handle.wait() if hasattr(handle, 'wait') else handle
+            varbind_list = handle.wait() if hasattr(handle, "wait") else handle
             value_obj = varbind_list[0].value
-            return value_obj.value if hasattr(value_obj, 'value') else value_obj
+            return value_obj.value if hasattr(value_obj, "value") else value_obj
 
         def on_ok(mode_status):
             self._append_result(
@@ -1404,7 +1538,9 @@ class RSUConfigurationApp(QMainWindow):
 
         self._run_async(self._set_operate, on_ok, on_err)
 
-    def _destroy_entry(self, delete_oid: str, on_done: Optional[Callable[[], None]] = None) -> None:
+    def _destroy_entry(
+        self, delete_oid: str, on_done: Optional[Callable[[], None]] = None
+    ) -> None:
         def work():
             self._set_standby()
             session = self._get_session()
@@ -1460,8 +1596,12 @@ class RSUConfigurationApp(QMainWindow):
             "AES": AesCfb128,
         }
 
-        auth_protocol = auth_protocol_map.get(self.auth_protocol_combo.currentText(), HmacSha)
-        priv_protocol = priv_protocol_map.get(self.privacy_protocol_combo.currentText(), AesCfb128)
+        auth_protocol = auth_protocol_map.get(
+            self.auth_protocol_combo.currentText(), HmacSha
+        )
+        priv_protocol = priv_protocol_map.get(
+            self.privacy_protocol_combo.currentText(), AesCfb128
+        )
 
         username = self.snmpv3_user_edit.text()
         auth_password = self.auth_password_edit.text()
@@ -1471,9 +1611,13 @@ class RSUConfigurationApp(QMainWindow):
             snmp_engine.addUser(
                 username,
                 authProtocol=auth_protocol,
-                authSecret=auth_password.encode() if isinstance(auth_password, str) else auth_password,
+                authSecret=auth_password.encode()
+                if isinstance(auth_password, str)
+                else auth_password,
                 privProtocol=priv_protocol,
-                privSecret=priv_password.encode() if isinstance(priv_password, str) else priv_password,
+                privSecret=priv_password.encode()
+                if isinstance(priv_password, str)
+                else priv_password,
             )
         except Exception:
             pass

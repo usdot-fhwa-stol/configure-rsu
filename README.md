@@ -2,6 +2,8 @@
 
 ## Prerequisites
 
+- Python 3.10+
+
 - PyQt6
 - snmp
 
