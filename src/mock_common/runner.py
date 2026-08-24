@@ -8,7 +8,6 @@ from typing import Any
 
 from .recorder import Recorder
 
-
 LogCallback = Callable[[str], None]
 MetricsCallback = Callable[[str, dict[str, Any]], None]
 
@@ -55,7 +54,7 @@ class BroadcastRunner:
             log_callback: Optional callback for log messages.
             metrics_callback: Optional callback for send metrics.
         """
-        
+
         self.target_ip = target_ip
         self.target_port = target_port
         self.selected_messages = selected_messages
@@ -202,10 +201,7 @@ class BroadcastRunner:
         next_send = message_start
         data = self._build_amf(message_type)
 
-        self.log(
-            f"Broadcasting {message_type} for "
-            f"{self.period_seconds} second(s)."
-        )
+        self.log(f"Broadcasting {message_type} for {self.period_seconds} second(s).")
 
         while not self._stop_requested and time.monotonic() < message_end:
             now = time.monotonic()
@@ -225,9 +221,7 @@ class BroadcastRunner:
                 total_bytes_sent += len(data)
             except OSError as exc:
                 error_name = type(exc).__name__
-                error_types[error_name] = (
-                    error_types.get(error_name, 0) + 1
-                )
+                error_types[error_name] = error_types.get(error_name, 0) + 1
                 self.log(f"[{message_type}] send error: {exc}")
 
             next_send += interval_seconds
@@ -236,9 +230,7 @@ class BroadcastRunner:
                 next_send = time.monotonic()
 
         elapsed_seconds = max(time.monotonic() - message_start, 0.001)
-        throughput_kbps = (
-            total_bytes_sent * 8.0 / 1024.0
-        ) / elapsed_seconds
+        throughput_kbps = (total_bytes_sent * 8.0 / 1024.0) / elapsed_seconds
 
         metrics: dict[str, Any] = {
             "attempted_count": attempted_count,

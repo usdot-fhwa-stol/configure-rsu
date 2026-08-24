@@ -1,7 +1,7 @@
 from PyQt6.QtGui import QRegularExpressionValidator
 from PyQt6.QtWidgets import QAbstractSpinBox, QLineEdit, QSpinBox
 
-from constants import HEX_REGEX
+from src.constants import HEX_REGEX
 
 
 def _hex_validator() -> QRegularExpressionValidator:

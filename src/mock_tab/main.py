@@ -27,10 +27,10 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from constants import PAYLOAD_DICT, PCAP_DIRECTORY
-from utils import _make_hex_edit, _make_spinbox, _normalise_hex
+from src.constants import PAYLOAD_DICT, PCAP_DIRECTORY
+from src.utils import _make_hex_edit, _make_spinbox, _normalise_hex
 
-from .broadcaster_external import ExternalBroadcastWorke
+from .broadcaster_external import ExternalBroadcastWorker
 from .broadcaster_local import LocalBroadcastWorker
 
 
@@ -46,7 +46,7 @@ class MockMessagesTab(QWidget):
 
         self._session_factory = session_factory
         self._broadcast_thread: (
-            LocalBroadcastWorker | ExternalBroadcastWorke | None
+            LocalBroadcastWorker | ExternalBroadcastWorker | None
         ) = None
 
         self._build_ui()
@@ -562,7 +562,7 @@ class MockMessagesTab(QWidget):
             / f"mock_ntcip_1218_{timestamp}.pcap"
         )
 
-        self._broadcast_thread = ExternalBroadcastWorke(
+        self._broadcast_thread = ExternalBroadcastWorker(
             session_factory=self._session_factory,
             message_payloads=self._message_payloads(),
             first_index=self.ntcip_index_spin.value(),

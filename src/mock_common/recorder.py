@@ -38,8 +38,7 @@ class Recorder:
         tcpdump = shutil.which("tcpdump")
         if tcpdump is None:
             raise RuntimeError(
-                "tcpdump was not found. Install it with: "
-                "sudo apt install tcpdump"
+                "tcpdump was not found. Install it with: sudo apt install tcpdump"
             )
 
         command = [
@@ -79,7 +78,7 @@ class Recorder:
             RuntimeError: If tcpdump exits, cannot be monitored, or does not
                 start listening before the timeout.
         """
-        
+
         if self.process is None:
             raise RuntimeError("tcpdump process was not created.")
 
@@ -159,11 +158,7 @@ class Recorder:
                         process.kill()
                         process.wait(timeout=2)
 
-            stderr = (
-                process.stderr.read().strip()
-                if process.stderr is not None
-                else ""
-            )
+            stderr = process.stderr.read().strip() if process.stderr is not None else ""
 
             return stderr
         finally:

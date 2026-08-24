@@ -18,14 +18,14 @@ def convert_datetime_to_snmp(date_str: str) -> bytes:
     """
     try:
         # Parse the date string
-        date_part, time_part = date_str.split(',')
-        year, month, day = map(int, date_part.split('-'))
+        date_part, time_part = date_str.split(",")
+        year, month, day = map(int, date_part.split("-"))
 
         # Parse time with deciseconds
-        time_components = time_part.split(':')
+        time_components = time_part.split(":")
         hour = int(time_components[0])
         minute = int(time_components[1])
-        seconds_with_ds = time_components[2].split('.')
+        seconds_with_ds = time_components[2].split(".")
         second = int(seconds_with_ds[0])
         decisecond = int(seconds_with_ds[1]) if len(seconds_with_ds) > 1 else 0
 
@@ -33,20 +33,25 @@ def convert_datetime_to_snmp(date_str: str) -> bytes:
         year_high = (year >> 8) & 0xFF
         year_low = year & 0xFF
 
-        date_time_bytes = bytes([
-            year_high,      # octet 1: year high byte
-            year_low,       # octet 2: year low byte
-            month,          # octet 3: month
-            day,            # octet 4: day
-            hour,           # octet 5: hour
-            minute,         # octet 6: minute
-            second,         # octet 7: second
-            decisecond      # octet 8: decisecond
-        ])
+        date_time_bytes = bytes(
+            [
+                year_high,  # octet 1: year high byte
+                year_low,  # octet 2: year low byte
+                month,  # octet 3: month
+                day,  # octet 4: day
+                hour,  # octet 5: hour
+                minute,  # octet 6: minute
+                second,  # octet 7: second
+                decisecond,  # octet 8: decisecond
+            ]
+        )
 
         return date_time_bytes
     except Exception as e:
-        raise ValueError(f"Invalid date format '{date_str}'. Expected format: yyyy-mm-dd,hh:mm:ss.ms (e.g., 2025-01-01,00:00:00.0). Error: {e}")
+        raise ValueError(
+            f"Invalid date format '{date_str}'. Expected format: yyyy-mm-dd,hh:mm:ss.ms (e.g., 2025-01-01,00:00:00.0). Error: {e}"
+        )
+
 
 def convert_snmp_datetime_to_string(date_bytes: bytes) -> str:
     """
@@ -66,7 +71,9 @@ def convert_snmp_datetime_to_string(date_bytes: bytes) -> str:
     """
     try:
         if len(date_bytes) != 8:
-            return ' '.join(f'{b:02x}' for b in date_bytes)  # Return as hex if not 8 bytes
+            return " ".join(
+                f"{b:02x}" for b in date_bytes
+            )  # Return as hex if not 8 bytes
 
         # Extract values from bytes
         year = (date_bytes[0] << 8) | date_bytes[1]  # Combine high and low bytes
@@ -81,7 +88,8 @@ def convert_snmp_datetime_to_string(date_bytes: bytes) -> str:
         return f"{year:04d}-{month:02d}-{day:02d},{hour:02d}:{minute:02d}:{second:02d}.{decisecond}"
     except Exception:
         # If conversion fails, return as hex string
-        return ' '.join(f'{b:02x}' for b in date_bytes)
+        return " ".join(f"{b:02x}" for b in date_bytes)
+
 
 def format_snmp_value(varbind) -> str:
     """Format SNMP VarBind value, converting binary data to hex string if needed, and 8-byte octet strings to datetime."""
@@ -89,11 +97,11 @@ def format_snmp_value(varbind) -> str:
     value = varbind.value
 
     # Handle INTEGER32 types
-    if hasattr(value, 'value') and isinstance(value.value, int):
+    if hasattr(value, "value") and isinstance(value.value, int):
         return str(value.value)
 
     # Handle different value types from snmp library
-    if hasattr(value, 'data'):  # OctetString type
+    if hasattr(value, "data"):  # OctetString type
         data = value.data
         if isinstance(data, bytes):
             # Check if this is an 8-byte DateAndTime value
@@ -101,20 +109,20 @@ def format_snmp_value(varbind) -> str:
                 # Try to convert to datetime string
                 datetime_str = convert_snmp_datetime_to_string(data)
                 # Only return as datetime if it looks valid (not all hex)
-                if ',' in datetime_str and '-' in datetime_str:
+                if "," in datetime_str and "-" in datetime_str:
                     return datetime_str
 
             # Try to decode as UTF-8 string first
             try:
-                decoded_str = data.decode('utf-8')
+                decoded_str = data.decode("utf-8")
                 # If it's printable, return as string
-                if all(32 <= ord(c) <= 126 or c in '\t\n\r' for c in decoded_str):
+                if all(32 <= ord(c) <= 126 or c in "\t\n\r" for c in decoded_str):
                     return decoded_str
             except (UnicodeDecodeError, AttributeError):
                 pass
 
             # Return as hex string if not printable
-            return ' '.join(f'{b:02x}' for b in data)
+            return " ".join(f"{b:02x}" for b in data)
         elif isinstance(data, str):
             return data
         return str(data)
@@ -122,29 +130,30 @@ def format_snmp_value(varbind) -> str:
         # Check if this is an 8-byte DateAndTime value
         if len(value) == 8:
             datetime_str = convert_snmp_datetime_to_string(value)
-            if ',' in datetime_str and '-' in datetime_str:
+            if "," in datetime_str and "-" in datetime_str:
                 return datetime_str
 
         # Try to decode as UTF-8 string first
         try:
-            decoded_str = value.decode('utf-8')
+            decoded_str = value.decode("utf-8")
             # If it's printable, return as string
-            if all(32 <= ord(c) <= 126 or c in '\t\n\r' for c in decoded_str):
+            if all(32 <= ord(c) <= 126 or c in "\t\n\r" for c in decoded_str):
                 return decoded_str
         except (UnicodeDecodeError, AttributeError):
             pass
 
-        return ' '.join(f'{b:02x}' for b in value)
+        return " ".join(f"{b:02x}" for b in value)
     elif isinstance(value, str):
         # Check if string contains non-printable characters
         if any(ord(c) < 32 or ord(c) > 126 for c in value):
             # Convert to hex
-            return ' '.join(f'{ord(c):02x}' for c in value)
+            return " ".join(f"{ord(c):02x}" for c in value)
         return value
     elif isinstance(value, int):
         return str(value)
 
     return str(value)
+
 
 def get_ifm_help_content() -> str:
     """Return help content for Immediate Forward tab."""
@@ -175,6 +184,8 @@ Options: Bit-mapped options (BITS, hex):
     Bit 2: 0=ContXmit,     1=NoXmitShortTermXceeded
     Bit 3: 0=ContXmit,     1=NoXmitLongTermXceeded
 """
+
+
 def get_tfm_help_content() -> str:
     """Return help content for Transmitted Message Forward tab."""
     return """Transmitted Message Forward (TFM) Configuration Help
@@ -211,6 +222,7 @@ Secure: Security requirement for forwarded messages
         0 = Accept both secure and unsecure messages
         1 = Accept only secure messages
 """
+
 
 def get_rfm_help_content() -> str:
     """Return help content for Received Message Forward tab."""
@@ -260,6 +272,7 @@ Auth Msg Interval: Authentication message interval in deciseconds
                    0 = No authentication messages
 """
 
+
 def get_srm_help_content() -> str:
     """Return help content for Store and Repeat Messages tab."""
     return """Store and Repeat Messages (SRM) Configuration Help
@@ -302,6 +315,7 @@ Options: Bit-mapped options (BITS, hex):
     Bit 2: 0=ContXmit,     1=NoXmitShortTermXceeded
     Bit 3: 0=ContXmit,     1=NoXmitLongTermXceeded
 """
+
 
 def get_amf_help_content() -> str:
     """Return help content for Active Message File tab."""
@@ -352,7 +366,7 @@ DeliveryStop=<mm/dd/yyyy, hh:mm>
 # Message Signature/Encryption
 Signature=<True/False>
 Encryption=<True/False>
-# 
+#
 # Message Payload (encoded according to J2735 or other definition)
 Payload=<V2X message payload>
 """

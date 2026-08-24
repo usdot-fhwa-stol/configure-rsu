@@ -7,7 +7,6 @@ from mock_common.runner import BroadcastRunner
 
 class LocalBroadcastWorkerSignals(QObject):
     """Signals emitted by `BroadcastWorker`."""
-
     log = pyqtSignal(str)
     metrics_updated = pyqtSignal(str, dict)
     finished = pyqtSignal()

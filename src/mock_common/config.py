@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 
-
 MODE_NO_RSU = "no-rsu"
 MODE_USING_RSU = "using-rsu"
 

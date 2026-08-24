@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QRegularExpression
+from PyQt6.QtCore import QRegularExpression, Qt
 
 HEX_REGEX = QRegularExpression(r"^[0-9A-Fa-f]*$")
 REPO_ROOT = Path(__file__).resolve().parent.parent
