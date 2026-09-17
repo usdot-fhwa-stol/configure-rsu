@@ -403,7 +403,7 @@ class RSUConfigurationApp(QMainWindow):
 
             # Row 1: Channel and Enable (readonly)
             grid.addWidget(QLabel("Channel:"), 1, 0, ALIGN_RIGHT)
-            channel_spin = _make_spinbox(default_channel, 1, 255, readonly=True)
+            channel_spin = _make_spinbox(default_channel, 1, 255, readonly=False)
             grid.addWidget(channel_spin, 1, 1)
             grid.addWidget(QLabel("Enable:"), 1, 2, ALIGN_RIGHT)
             enable_spin = _make_spinbox(1, 0, 1, readonly=True)
@@ -1217,7 +1217,7 @@ class RSUConfigurationApp(QMainWindow):
             grid.addWidget(psid_edit, 0, 3)
 
             grid.addWidget(QLabel("TX Channel:"), 1, 0, ALIGN_RIGHT)
-            channel_spin = _make_spinbox(default_channel, 1, 255, readonly=True)
+            channel_spin = _make_spinbox(default_channel, 1, 255, readonly=False)
             grid.addWidget(channel_spin, 1, 1)
             grid.addWidget(QLabel("TX Interval (ms):"), 1, 2, ALIGN_RIGHT)
             interval_spin = _make_spinbox(1000, 0, 1_000_000)
@@ -1345,7 +1345,7 @@ class RSUConfigurationApp(QMainWindow):
         self.tx_mode_combo.setCurrentText("CONT")
         form.addRow("Tx Mode:", self.tx_mode_combo)
 
-        self.tx_channel_spin = _make_spinbox(183, 1, 255, readonly=True)
+        self.tx_channel_spin = _make_spinbox(183, 1, 255, readonly=False)
         form.addRow("Tx Channel:", self.tx_channel_spin)
 
         self.tx_interval_spin = _make_spinbox(0, 0, 1_000_000, readonly=True)
