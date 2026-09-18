@@ -589,12 +589,8 @@ class RSUConfigurationApp(QMainWindow):
                 return
 
             try:
-                if mode_mib == "ntcip1218":
-                    start_date_bytes = cr_helper.convert_datetime_to_snmp(start_date)
-                    stop_date_bytes = cr_helper.convert_datetime_to_snmp(stop_date)
-                else:
-                    start_date_bytes = cr_helper.convert_datetime_to_rsu41(start_date)
-                    stop_date_bytes = cr_helper.convert_datetime_to_rsu41(stop_date)
+                start_date_bytes, stop_date_bytes = cr_helper.convert_date_range(
+                    start_date, stop_date, mode_mib)
             except ValueError as e:
                 QMessageBox.critical(self, "Validation Error", f"Entry {rfm_index}: {e}")
                 return
@@ -858,8 +854,9 @@ class RSUConfigurationApp(QMainWindow):
                 return
 
             try:
-                start_date_bytes = cr_helper.convert_datetime_to_snmp(start_date)
-                stop_date_bytes = cr_helper.convert_datetime_to_snmp(stop_date)
+                # Transmtted Messages for Forwarding exists only in NTCIP 1218, so the mode is fixed here.
+                start_date_bytes, stop_date_bytes = cr_helper.convert_date_range(
+                    start_date, stop_date, "ntcip1218")
             except ValueError as e:
                 QMessageBox.critical(self, "Validation Error", f"Entry {tfm_index}: {e}")
                 return
@@ -1138,12 +1135,8 @@ class RSUConfigurationApp(QMainWindow):
                 return
 
             try:
-                if mode_mib == "ntcip1218":
-                    start_date_bytes = cr_helper.convert_datetime_to_snmp(start_date)
-                    stop_date_bytes = cr_helper.convert_datetime_to_snmp(stop_date)
-                else:
-                    start_date_bytes = cr_helper.convert_datetime_to_rsu41(start_date)
-                    stop_date_bytes = cr_helper.convert_datetime_to_rsu41(stop_date)
+                start_date_bytes, stop_date_bytes = cr_helper.convert_date_range(
+                    start_date, stop_date, mode_mib)
             except ValueError as e:
                 QMessageBox.critical(self, "Validation Error", f"Entry {srm_index}: {e}")
                 return
