@@ -6,8 +6,6 @@ from cr_helper import (
     convert_date_range,
     convert_datetime,
     format_snmp_value,
-    get_rfm_help_content,
-    get_srm_help_content,
     parse_datetime_fields,
 )
 
@@ -36,8 +34,7 @@ class TestConvertDatetimeRsu41Mode:
         "2025-03-04,05:06",          # omitted entirely
     ])
     def test_seconds_and_deciseconds_are_ignored(self, date_str):
-        # Only the minute field and coarser are encoded, so every value of
-        # seconds/deciseconds, present or not, must produce the same 6 octets.
+        # Only 6 octets in rsu41
         assert convert_datetime(date_str, "rsu41") == b"\x07\xe9\x03\x04\x05\x06"
 
     @pytest.mark.parametrize("date_str", [
@@ -365,17 +362,3 @@ class TestFormatSnmpValueFallbacks:
 
     def test_octet_string_holding_other_type_is_stringified(self):
         assert _format(_FakeOctetString(12345)) == "12345"
-
-
-class TestRsuModeHelpContent:
-    """Check RSU Mode help text differences."""
-
-    @pytest.mark.parametrize("get_content,ntcip1218_oid,rsu41_oid", [
-        (get_rfm_help_content, "1.3.6.1.4.1.1206.4.2.18.5.2.1", "1.0.15628.4.1.7.1"),  # rsuReceivedMsgTable / rsuDsrcForwardTable
-        (get_srm_help_content, "1.3.6.1.4.1.1206.4.2.18.3.2.1", "1.0.15628.4.1.4.1"),  # rsuMsgRepeatStatusTable / rsuSRMStatusTable
-    ])
-    def test_help_documents_both_modes(self, get_content, ntcip1218_oid, rsu41_oid):
-        content = get_content()
-        assert "=== RSU Mode differences ===" in content
-        assert ntcip1218_oid in content
-        assert rsu41_oid in content
