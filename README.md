@@ -38,6 +38,29 @@ The UI for this tool contains four separate tabs. Each tab is used for specific 
 6. Store-and-Repeat
     - Get/Destroy/Set store-and-repeat rules in this tab.
 
-### Version
+## Testing
+
+Unit tests live in [tests](/tests/) and are run with `pytest`.
+
+Install the development dependencies (includes runtime dependencies):
+```bash
+source .venv/bin/activate
+pip3 install -r install/requirements-dev.txt
+```
+
+Run the full suite from the repository root:
+```bash
+pytest
+```
+
+Run a single file or test:
+```bash
+pytest tests/test_cr_helper.py
+pytest tests/test_cr_helper.py::TestConvertDatetimeToRsu41
+```
+
+Test configuration at [pytest.ini](/pytest.ini).
+
+## Version
 
 Version 1.0 – Dec 05, 2025
