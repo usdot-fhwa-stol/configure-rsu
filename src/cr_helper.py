@@ -182,14 +182,8 @@ def convert_snmp_datetime_to_string(date_bytes: bytes) -> str:
         # If conversion fails, return as hex string
         return _to_hex(date_bytes)
 
-def _format_octet_bytes(data: bytes) -> str:
-    """Format an OctetString payload for display."""
-    if len(data) == 8:
-        datetime_str = convert_snmp_datetime_to_string(data)
-        # Only return as datetime if it looks valid (not all hex).
-        if ',' in datetime_str and '-' in datetime_str:
-            return datetime_str
-
+def _format_octet_text(data: bytes) -> str:
+    """Decode an OctetString payload as text, falling back to hex if it is not printable ASCII."""
     try:
         decoded_str = data.decode('utf-8')
         if _is_printable_ascii(decoded_str):
@@ -198,6 +192,16 @@ def _format_octet_bytes(data: bytes) -> str:
         pass
 
     return _to_hex(data)
+
+def _format_octet_bytes(data: bytes) -> str:
+    """Format an OctetString payload for display."""
+    if len(data) == 8:
+        datetime_str = convert_snmp_datetime_to_string(data)
+        # Only return as datetime if it looks valid (not all hex).
+        if ',' in datetime_str and '-' in datetime_str:
+            return datetime_str
+
+    return _format_octet_text(data)
 
 def _format_text(value: str) -> str:
     """Format a str payload, falling back to hex if it is not printable ASCII."""
@@ -230,6 +234,22 @@ def format_snmp_value(varbind) -> str:
         return str(value)
 
     return str(value)
+
+def format_snmp_hex(varbind) -> str:
+    """Format an OctetString VarBind as unspaced, uppercase hex."""
+    value = varbind.value
+    data = value.data if hasattr(value, 'data') else value
+    if isinstance(data, (bytes, str)):
+        return _to_hex(data).replace(' ', '').upper()
+    return format_snmp_value(varbind)
+
+def format_snmp_text(varbind) -> str:
+    """Format an OctetString VarBind as text, never as a date, e.g. an 8-character IP such as 10.0.0.1."""
+    value = varbind.value
+    data = value.data if hasattr(value, 'data') else value
+    if isinstance(data, bytes):
+        return _format_octet_text(data)
+    return format_snmp_value(varbind)
 
 def get_ifm_help_content() -> str:
     """Return help content for Immediate Forward tab."""
