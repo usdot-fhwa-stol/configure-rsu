@@ -5,6 +5,8 @@ import pytest
 from cr_helper import (
     convert_date_range,
     convert_datetime,
+    format_snmp_hex,
+    format_snmp_text,
     format_snmp_value,
     parse_datetime_fields,
 )
@@ -362,3 +364,65 @@ class TestFormatSnmpValueFallbacks:
 
     def test_octet_string_holding_other_type_is_stringified(self):
         assert _format(_FakeOctetString(12345)) == "12345"
+
+
+def _format_hex(value) -> str:
+    return format_snmp_hex(_FakeVarBind(value))
+
+
+class TestFormatSnmpHex:
+    """format_snmp_hex: OctetStrings always become unspaced, uppercase hex, never text or a date."""
+
+    @_BARE_OR_WRAPPED
+    @pytest.mark.parametrize("data,expected", [
+        (bytes.fromhex("8002"), "8002"),                            # typical PSID
+        (b"Hello World", "48656C6C6F20576F726C64"),                 # printable ASCII is not decoded
+        (b"     ", "2020202020"),                                   # all-space payload is kept
+        (bytes.fromhex("0011223344556677"), "0011223344556677"),    # 8 octets are not read as a date
+        (b"\x00\x0f\xff", "000FFF"),                                # zero-padded
+        (b"", ""),
+    ], ids=["psid", "ascii", "spaces", "eight-octets", "zero-padded", "empty"])
+    def test_bytes_become_hex(self, wrap, data, expected):
+        assert _format_hex(wrap(data)) == expected
+
+    @_BARE_OR_WRAPPED
+    @pytest.mark.parametrize("value,expected", [
+        ("rsu", "727375"),
+        ("\x01\x02", "0102"),
+    ], ids=["printable", "unprintable"])
+    def test_text_becomes_hex(self, wrap, value, expected):
+        assert _format_hex(wrap(value)) == expected
+
+    @pytest.mark.parametrize("value", [_FakeInteger32(32770), 42, None],
+                             ids=["integer32", "bare-int", "none"])
+    def test_non_octet_values_match_format_snmp_value(self, value):
+        assert _format_hex(value) == _format(value)
+
+
+def _format_text(value) -> str:
+    return format_snmp_text(_FakeVarBind(value))
+
+
+class TestFormatSnmpText:
+    """format_snmp_text: OctetStrings become printable ASCII text, then hex, never a date."""
+
+    @_BARE_OR_WRAPPED
+    @pytest.mark.parametrize("data,expected", [
+        (b"10.0.0.1", "10.0.0.1"),                                  # 8 characters are not read as a date
+        (b"192.168.1.10", "192.168.1.10"),
+        (b"fe80::1", "fe80::1"),
+        (bytes.fromhex("0011223344556677"), "00 11 22 33 44 55 66 77"),  # unprintable falls back to hex
+        (b"", ""),
+    ], ids=["eight-char-ip", "ipv4", "ipv6", "unprintable", "empty"])
+    def test_bytes_become_text(self, wrap, data, expected):
+        assert _format_text(wrap(data)) == expected
+
+    @_BARE_OR_WRAPPED
+    @pytest.mark.parametrize("value", ["10.0.0.1", "\x01\x02"], ids=["printable", "unprintable"])
+    def test_text_matches_format_snmp_value(self, wrap, value):
+        assert _format_text(wrap(value)) == _format(wrap(value))
+
+    @pytest.mark.parametrize("value", [_FakeInteger32(5000), 42, None],
+                             ids=["integer32", "bare-int", "none"])
+    def test_non_octet_values_match_format_snmp_value(self, value):
+        assert _format_text(value) == _format(value)

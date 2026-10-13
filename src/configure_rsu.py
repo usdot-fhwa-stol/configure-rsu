@@ -6,15 +6,18 @@ from binascii import unhexlify
 from typing import Any, Callable, Dict, List, Optional
 
 from PyQt6.QtCore import (
-    QObject, QRegularExpression, QRunnable, Qt, QThreadPool, pyqtSignal, pyqtSlot,
+    QObject, QRegularExpression, QRunnable, QSize, Qt, QThreadPool, pyqtSignal, pyqtSlot,
 )
-from PyQt6.QtGui import QBrush, QColor, QRegularExpressionValidator
+from PyQt6.QtGui import (
+    QBrush, QColor, QKeySequence, QRegularExpressionValidator, QTextOption,
+)
 from PyQt6.QtWidgets import (
     QAbstractItemView, QAbstractSpinBox, QApplication, QButtonGroup, QComboBox,
     QDialog, QFormLayout, QGridLayout, QGroupBox, QHBoxLayout, QHeaderView,
-    QLabel, QLineEdit, QMainWindow, QMessageBox, QPushButton, QScrollArea,
-    QSpinBox, QTableWidget, QTableWidgetItem, QTabWidget, QTextEdit,
-    QVBoxLayout, QWidget,
+    QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton,
+    QScrollArea,
+    QSpinBox, QStyledItemDelegate, QTableWidget,
+    QTableWidgetItem, QTabWidget, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from dotenv import load_dotenv
@@ -82,6 +85,88 @@ class _Task(QRunnable):
             self.signals.error.emit(e)
             return
         self.signals.finished.emit(result)
+
+
+class _WrapAnywhereDelegate(QStyledItemDelegate):
+    """Wraps cell text anywhere by allowing a line break between every character."""
+
+    def initStyleOption(self, option, index) -> None:
+        super().initStyleOption(option, index)
+        view = option.widget
+        if isinstance(view, QAbstractItemView) and view.indexWidget(index) is not None:
+            option.text = ""
+        else:
+            option.text = "\u200b".join(option.text)
+
+# Show 4 lines max, scroll for more
+PAYLOAD_CELL_LINES = 4
+
+class _PayloadCell(QPlainTextEdit):
+    """Read-only payload display that grows with its text up to a few lines, then scrolls."""
+
+    def __init__(self, text: str) -> None:
+        super().__init__(text)
+        self.setReadOnly(True)
+        self.setAcceptDrops(False)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+        self.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self.setWordWrapMode(QTextOption.WrapMode.WrapAnywhere)
+        self.setFrameShape(QPlainTextEdit.Shape.NoFrame)
+        # Let the table's selection highlight show through
+        self.viewport().setAutoFillBackground(False)
+
+    def sizeHint(self) -> QSize:
+        # QPlainTextEdit's document layout reports its height in lines
+        lines = int(self.document().documentLayout().documentSize().height())
+        lines = max(1, min(lines, PAYLOAD_CELL_LINES))
+        margin = int(self.document().documentMargin())
+        # QPlainTextEdit scrolls unless it has 1px to spare
+        height = lines * self.fontMetrics().lineSpacing() + 2 * margin + 1
+        return QSize(super().sizeHint().width(), height)
+
+
+def _set_payload_cell(table: QTableWidget, row: int, col: int, text: str) -> None:
+    """Show text in a _PayloadCell."""
+    table.setItem(row, col, QTableWidgetItem(text))
+    table.setCellWidget(row, col, _PayloadCell(text))
+
+
+class _ResultsTable(QTableWidget):
+    """Results cells can be selected and copied, but never edited or pasted into."""
+
+    def edit(self, index, trigger=None, event=None) -> bool:
+        # Never open a cell editor, whatever asks for one
+        return False
+
+    def keyPressEvent(self, event) -> None:
+        if event.matches(QKeySequence.StandardKey.Paste):
+            event.accept()  # Swallow paste so it reaches nothing
+            return
+        super().keyPressEvent(event)
+
+
+def _make_results_table(headers: List[str]) -> QTableWidget:
+    """Read-only results table that shows full cell text."""
+    table = _ResultsTable(0, len(headers))
+    table.setHorizontalHeaderLabels(headers)
+    table.verticalHeader().setVisible(False)
+    # Also re-wraps the rows whenever column widths change.
+    table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+    table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+    table.setDragDropMode(QAbstractItemView.DragDropMode.NoDragDrop)  # Also stops drops
+    table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+    table.setWordWrap(True)  # Qt's default, but _WrapAnywhereDelegate relies on it
+    table.setTextElideMode(Qt.TextElideMode.ElideNone)
+    table.setItemDelegate(_WrapAnywhereDelegate(table))
+    table.setMinimumHeight(120)
+    header = table.horizontalHeader()
+    for i in range(len(headers)):
+        if i == 0 or i == len(headers) - 1:
+            header.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
+        else:
+            header.setSectionResizeMode(i, QHeaderView.ResizeMode.Stretch)
+    return table
 
 
 class RSUConfigurationApp(QMainWindow):
@@ -244,31 +329,15 @@ class RSUConfigurationApp(QMainWindow):
         results_group = QGroupBox("Results")
         results_layout = QVBoxLayout(results_group)
         self.results_text = QTextEdit()
+        # Results only: no typing, pasting or dropping in
         self.results_text.setReadOnly(True)
+        self.results_text.setAcceptDrops(False)
         results_layout.addWidget(self.results_text)
         outer.addWidget(results_group, 1)
 
         self.tabs.addTab(tab, "SNMP Credentials")
 
     # ---------- Results table helper ----------
-    @staticmethod
-    def _make_results_table(headers: List[str]) -> QTableWidget:
-        table = QTableWidget(0, len(headers))
-        table.setHorizontalHeaderLabels(headers)
-        table.verticalHeader().setVisible(False)
-        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-        table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        table.setMinimumHeight(120)
-        header = table.horizontalHeader()
-        for i in range(len(headers)):
-            if i == 0 or i == len(headers) - 1:
-                header.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
-            else:
-                header.setSectionResizeMode(i, QHeaderView.ResizeMode.Stretch)
-        return table
-
     @staticmethod
     def _fill_error_row(table: QTableWidget, row: int, err: str, data_cols: int) -> None:
         item = QTableWidgetItem(f"error retrieving info: {err}")
@@ -301,7 +370,7 @@ class RSUConfigurationApp(QMainWindow):
         # Results table
         results_group = QGroupBox("IFM Results")
         results_layout = QVBoxLayout(results_group)
-        ifm_table = self._make_results_table(["Index", "PSID", ""])
+        ifm_table = _make_results_table(["Index", "PSID", ""])
         results_layout.addWidget(ifm_table)
         outer.addWidget(results_group, 1)
 
@@ -489,7 +558,7 @@ class RSUConfigurationApp(QMainWindow):
                     try:
                         handle = session.get(f"{base_oid}.2.{i}")
                         varbind_list = handle.wait() if hasattr(handle, 'wait') else handle
-                        value = cr_helper.format_snmp_value(varbind_list[0])
+                        value = cr_helper.format_snmp_hex(varbind_list[0])  # psid
                         results.append((i, value, None))
                     except (Timeout, ErrorResponse) as e:
                         results.append((i, None, str(e)))
@@ -552,7 +621,7 @@ class RSUConfigurationApp(QMainWindow):
 
         results_group = QGroupBox("RFM Results")
         results_layout = QVBoxLayout(results_group)
-        rfm_table = self._make_results_table(["Index", "PSID", "Dest IP", "Dest Port", ""])
+        rfm_table = _make_results_table(["Index", "PSID", "Dest IP", "Dest Port", ""])
         results_layout.addWidget(rfm_table)
         outer.addWidget(results_group, 1)
 
@@ -763,10 +832,13 @@ class RSUConfigurationApp(QMainWindow):
                 for i in range(1, 7):
                     try:
                         values = []
-                        for j in (2, 3, 4):
+                        # PSID as hex, Dest IP as text, Dest Port as a number
+                        for j, fmt in ((2, cr_helper.format_snmp_hex),
+                                       (3, cr_helper.format_snmp_text),
+                                       (4, cr_helper.format_snmp_value)):
                             handle = session.get(f"{base_oid}.{j}.{i}")
                             varbind_list = handle.wait() if hasattr(handle, 'wait') else handle
-                            values.append(cr_helper.format_snmp_value(varbind_list[0]))
+                            values.append(fmt(varbind_list[0]))
                         results.append((i, values, None))
                     except (Timeout, ErrorResponse) as e:
                         results.append((i, None, str(e)))
@@ -828,9 +900,9 @@ class RSUConfigurationApp(QMainWindow):
         config_vbox.addWidget(config_scroll)
         outer.addWidget(config_group, 1)
 
-        results_group = QGroupBox("RFM Results")
+        results_group = QGroupBox("TFM Results")
         results_layout = QVBoxLayout(results_group)
-        tfm_table = self._make_results_table(["Index", "PSID", "Dest IP", "Dest Port", ""])
+        tfm_table = _make_results_table(["Index", "PSID", "Dest IP", "Dest Port", ""])
         results_layout.addWidget(tfm_table)
         outer.addWidget(results_group, 1)
 
@@ -981,10 +1053,13 @@ class RSUConfigurationApp(QMainWindow):
                 for i in range(1, 7):
                     try:
                         values = []
-                        for j in (2, 3, 4):
+                        # PSID as hex, Dest IP as text, Dest Port as a number
+                        for j, fmt in ((2, cr_helper.format_snmp_hex),
+                                       (3, cr_helper.format_snmp_text),
+                                       (4, cr_helper.format_snmp_value)):
                             handle = session.get(f"1.3.6.1.4.1.1206.4.2.18.20.2.1.{j}.{i}")
                             varbind_list = handle.wait() if hasattr(handle, 'wait') else handle
-                            values.append(cr_helper.format_snmp_value(varbind_list[0]))
+                            values.append(fmt(varbind_list[0]))
                         results.append((i, values, None))
                     except (Timeout, ErrorResponse) as e:
                         results.append((i, None, str(e)))
@@ -1047,7 +1122,7 @@ class RSUConfigurationApp(QMainWindow):
 
         results_group = QGroupBox("SRM Results")
         results_layout = QVBoxLayout(results_group)
-        srm_table = self._make_results_table(["Index", "PSID", "Payload", ""])
+        srm_table = _make_results_table(["Index", "PSID", "Payload", ""])
         results_layout.addWidget(srm_table)
         outer.addWidget(results_group, 1)
 
@@ -1086,7 +1161,7 @@ class RSUConfigurationApp(QMainWindow):
                         for j in (2, payload_col):  # psid and payload
                             handle = session.get(f"{base_oid}.{j}.{i}")
                             varbind_list = handle.wait() if hasattr(handle, 'wait') else handle
-                            values.append(cr_helper.format_snmp_value(varbind_list[0]))
+                            values.append(cr_helper.format_snmp_hex(varbind_list[0]))
                         results.append((i, values, None))
                     except (Timeout, ErrorResponse) as e:
                         results.append((i, None, str(e)))
@@ -1099,8 +1174,10 @@ class RSUConfigurationApp(QMainWindow):
                     srm_table.insertRow(row)
                     srm_table.setItem(row, 0, QTableWidgetItem(str(i)))
                     if err is None:
-                        for col, v in enumerate(values, start=1):
-                            srm_table.setItem(row, col, QTableWidgetItem(v))
+                        # Populate the SRM table with retrieved values
+                        psid, payload = values
+                        srm_table.setItem(row, 1, QTableWidgetItem(psid))
+                        _set_payload_cell(srm_table, row, 2, payload)
                         btn = QPushButton("Destroy")
                         btn.clicked.connect(lambda _c=False, ii=i: destroy_srm_entry(ii))
                         srm_table.setCellWidget(row, 3, btn)
