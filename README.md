@@ -5,15 +5,17 @@
 - PyQt6
 - snmp
 
-Run the [install.sh](/install/install.sh) script to install all dependencies and a desktop app icon.
+**On Linux**, run the [install.sh](/install/install.sh) script:
 ```bash
 cd install
 ./install.sh
 ```
 
+**On Windows 11**, double-click [install.bat](/install/install.bat) in the `install` folder.
+
 The install script will:
  - Create a .env file in the [src](/src/) directory. You may update this file to contain your RSU's credentials, if repeated access will be needed.
- - Create a desktop app on your Desktop. Right-click on the RSU icon and select "Allow Launching" to be able to run the App.
+ - Create a desktop app on your Desktop. Right-click on the RSU icon and select "Allow Launching" to be able to run the App. On Windows, a "Configure-RSU" shortcut is created that can be launched directly.
 
 ## Usage
 
@@ -47,6 +49,8 @@ Install the development dependencies (includes runtime dependencies):
 source .venv/bin/activate
 pip3 install -r install/requirements-dev.txt
 ```
+
+**On Windows**, activate the virtual environment with `.venv\Scripts\Activate.ps1`.
 
 Run the full suite from the repository root:
 ```bash
