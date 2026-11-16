@@ -664,6 +664,13 @@ class RSUConfigurationApp(QMainWindow):
                 QMessageBox.critical(self, "Validation Error", f"Entry {rfm_index}: {e}")
                 return
 
+            if mode_mib == "rsu41":
+                try:
+                    dest_ip_bytes = cr_helper.encode_ipv6_address(dest_ip)
+                except ValueError as e:
+                    QMessageBox.critical(self, "Validation Error", f"Entry {rfm_index}: {e}")
+                    return
+
             def work():
                 self._set_standby()
                 session = self._get_session()
@@ -688,7 +695,7 @@ class RSUConfigurationApp(QMainWindow):
                     base_oid = "1.0.15628.4.1.7.1"
                     session.set(
                         (f"{base_oid}.2.{rfm_index}", OctetString(unhexlify(psid))),
-                        (f"{base_oid}.3.{rfm_index}", OctetString(dest_ip.encode())),
+                        (f"{base_oid}.3.{rfm_index}", OctetString(dest_ip_bytes)),
                         (f"{base_oid}.4.{rfm_index}", Integer32(dest_port)),
                         (f"{base_oid}.5.{rfm_index}", Integer32(protocol)),
                         (f"{base_oid}.6.{rfm_index}", Integer32(rssi)),
@@ -821,10 +828,12 @@ class RSUConfigurationApp(QMainWindow):
 
         def get_rfm_info() -> None:
             add_rfm_btn.setEnabled(True)
-            base_oid = (
-                "1.3.6.1.4.1.1206.4.2.18.5.2.1"
-                if self.mode_mib == "ntcip1218" else "1.0.15628.4.1.7.1"
-            )
+            if self.mode_mib == "ntcip1218":
+                base_oid = "1.3.6.1.4.1.1206.4.2.18.5.2.1"
+                ip_fmt = cr_helper.format_snmp_text
+            else:
+                base_oid = "1.0.15628.4.1.7.1"
+                ip_fmt = cr_helper.format_snmp_ipv6  # 16-octet Ipv6Address
 
             def work():
                 session = self._get_session()
@@ -832,9 +841,9 @@ class RSUConfigurationApp(QMainWindow):
                 for i in range(1, 7):
                     try:
                         values = []
-                        # PSID as hex, Dest IP as text, Dest Port as a number
+                        # PSID as hex, Dest IP as an address, Dest Port as a number
                         for j, fmt in ((2, cr_helper.format_snmp_hex),
-                                       (3, cr_helper.format_snmp_text),
+                                       (3, ip_fmt),
                                        (4, cr_helper.format_snmp_value)):
                             handle = session.get(f"{base_oid}.{j}.{i}")
                             varbind_list = handle.wait() if hasattr(handle, 'wait') else handle

@@ -63,6 +63,8 @@ pytest tests/test_cr_helper.py
 pytest tests/test_cr_helper.py::TestConvertDatetimeToRsu41
 ```
 
+Some tests in [test_cr_helper.py](/tests/test_cr_helper.py) are property-based, using [Hypothesis](https://hypothesis.readthedocs.io/): they state a rule and check it against generated inputs. If one fails, Hypothesis prints the smallest input that breaks the rule and replays it on the next run from its local `.hypothesis/` cache.
+
 Test configuration at [pytest.ini](/pytest.ini).
 
 ## Version

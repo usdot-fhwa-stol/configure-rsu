@@ -1,15 +1,37 @@
 """Unit tests for cr_helper."""
 
 import pytest
+from hypothesis import example, given, strategies as st
 
 from cr_helper import (
     convert_date_range,
     convert_datetime,
+    encode_ipv6_address,
+    format_ipv6_address,
     format_snmp_hex,
+    format_snmp_ipv6,
     format_snmp_text,
     format_snmp_value,
     parse_datetime_fields,
 )
+
+# @given: Property-based tests state a rule and check it against generated inputs
+# @example: provides the inputs that must be checked on every run.
+
+# Any valid date as (year, month, day, hour, minute, second, decisecond).
+# Day stops at 28 so that it exists in every month of every year.
+_valid_dates = st.tuples(
+    st.integers(0, 65535), st.integers(1, 12), st.integers(1, 28),
+    st.integers(0, 23), st.integers(0, 59), st.integers(0, 60), st.integers(0, 9),
+)
+
+_modes = st.sampled_from(["ntcip1218", "rsu41"])
+
+
+def _date_str(fields) -> str:
+    """Write date fields the way the UI takes them: yyyy-mm-dd,hh:mm:ss.ms"""
+    year, month, day, hour, minute, second, decisecond = fields
+    return f"{year:04d}-{month:02d}-{day:02d},{hour:02d}:{minute:02d}:{second:02d}.{decisecond}"
 
 
 class TestConvertDatetimeRsu41Mode:
@@ -29,15 +51,12 @@ class TestConvertDatetimeRsu41Mode:
         assert result[0] == (2025 >> 8) & 0xFF  # 0x07
         assert result[1] == 2025 & 0xFF         # 0xE9
 
-    @pytest.mark.parametrize("date_str", [
-        "2025-03-04,05:06:00.0",
-        "2025-03-04,05:06:59.9",
-        "2025-03-04,05:06:30.5",
-        "2025-03-04,05:06",          # omitted entirely
-    ])
-    def test_seconds_and_deciseconds_are_ignored(self, date_str):
-        # Only 6 octets in rsu41
-        assert convert_datetime(date_str, "rsu41") == b"\x07\xe9\x03\x04\x05\x06"
+    @given(fields=_valid_dates)
+    @example(fields=(2025, 3, 4, 5, 6, 59, 9))
+    def test_seconds_and_deciseconds_are_ignored(self, fields):
+        # Only 6 octets in rsu41, so the seconds change nothing, even when omitted entirely
+        without_seconds = _date_str(fields).rsplit(":", 1)[0]
+        assert convert_datetime(without_seconds, "rsu41") == convert_datetime(_date_str(fields), "rsu41")
 
     @pytest.mark.parametrize("date_str", [
         "",
@@ -82,13 +101,14 @@ class TestConvertDatetimeNtcip1218Mode:
 class TestConvertDatetimeModeSelection:
     """Behavior of the mode_mib argument itself."""
 
-    @pytest.mark.parametrize("mode_mib,octets", [("ntcip1218", 8), ("rsu41", 6)])
-    def test_octet_count_per_mode(self, mode_mib, octets):
-        assert len(convert_datetime("2025-01-01,00:00:00.0", mode_mib)) == octets
-
-    def test_rsu41_is_ntcip_1218_truncated_to_six_octets(self):
-        date_str = "2025-07-04,16:20:45.7"
-        assert convert_datetime(date_str, "rsu41") == convert_datetime(date_str, "ntcip1218")[:6]
+    @given(fields=_valid_dates)
+    @example(fields=(2025, 7, 4, 16, 20, 45, 7))
+    def test_rsu41_is_ntcip_1218_truncated_to_six_octets(self, fields):
+        ntcip1218 = convert_datetime(_date_str(fields), "ntcip1218")
+        rsu41 = convert_datetime(_date_str(fields), "rsu41")
+        assert len(ntcip1218) == 8
+        assert len(rsu41) == 6
+        assert rsu41 == ntcip1218[:6]
 
     @pytest.mark.parametrize("mode_mib", [
         "",
@@ -223,49 +243,35 @@ class TestConvertDateRange:
         result = convert_date_range("2025-01-01,00:00:00.0", "2030-01-01,00:00:00.0", mode_mib)
         assert result == (start_bytes, stop_bytes)
 
-    @pytest.mark.parametrize("mode_mib", ["ntcip1218", "rsu41"])
-    def test_matches_converting_each_value_separately(self, mode_mib):
-        start, stop = "2025-03-04,05:06:07.8", "2026-03-04,05:06:07.8"
-        assert convert_date_range(start, stop, mode_mib) == (
-            convert_datetime(start, mode_mib), convert_datetime(stop, mode_mib))
+    @given(start=_valid_dates, stop=_valid_dates, mode_mib=_modes)
+    # Equal dates are allowed.
+    @example(start=(2025, 6, 1, 12, 0, 0, 0), stop=(2025, 6, 1, 12, 0, 0, 0), mode_mib="ntcip1218")
+    @example(start=(2025, 6, 1, 12, 0, 0, 0), stop=(2025, 6, 1, 12, 0, 0, 0), mode_mib="rsu41")
+    # Reversed by a single decisecond.
+    @example(start=(2025, 6, 1, 12, 0, 0, 5), stop=(2025, 6, 1, 12, 0, 0, 4), mode_mib="ntcip1218")
+    # RSU 4.1 drops the seconds, so a pair that is reversed in real time but only
+    # below the minute encodes to two identical values and is allowed.
+    @example(start=(2025, 6, 1, 12, 0, 30, 0), stop=(2025, 6, 1, 12, 0, 29, 0), mode_mib="rsu41")
+    # calendar/datetime cannot represent year 0, but the encoding permits it.
+    @example(start=(0, 1, 1, 0, 0, 0, 0), stop=(1, 1, 1, 0, 0, 0, 0), mode_mib="ntcip1218")
+    @example(start=(1, 1, 1, 0, 0, 0, 0), stop=(0, 1, 1, 0, 0, 0, 0), mode_mib="ntcip1218")
+    def test_rejected_only_when_stop_precedes_start(self, start, stop, mode_mib):
+        start_str, stop_str = _date_str(start), _date_str(stop)
+        compared = 7 if mode_mib == "ntcip1218" else 5  # fields that reach the wire
 
-    @pytest.mark.parametrize("start,stop", [
-        ("2030-01-01,00:00:00.0", "2025-01-01,00:00:00.0"),  # year
-        ("2025-06-01,00:00:00.0", "2025-05-01,00:00:00.0"),  # month
-        ("2025-06-02,00:00:00.0", "2025-06-01,00:00:00.0"),  # day
-        ("2025-06-01,13:00:00.0", "2025-06-01,12:00:00.0"),  # hour
-        ("2025-06-01,12:30:00.0", "2025-06-01,12:29:00.0"),  # minute
-        ("2025-06-01,12:00:30.0", "2025-06-01,12:00:29.0"),  # second
-        ("2025-06-01,12:00:00.5", "2025-06-01,12:00:00.4"),  # decisecond
-    ])
-    def test_stop_before_start_raises_value_error(self, start, stop):
-        with pytest.raises(ValueError):
-            convert_date_range(start, stop, "ntcip1218")
+        if stop[:compared] < start[:compared]:
+            with pytest.raises(ValueError, match="earlier than start date"):
+                convert_date_range(start_str, stop_str, mode_mib)
+        else:
+            # Otherwise each value converts exactly as it would alone.
+            assert convert_date_range(start_str, stop_str, mode_mib) == (
+                convert_datetime(start_str, mode_mib), convert_datetime(stop_str, mode_mib))
 
     def test_error_message_names_both_dates(self):
         with pytest.raises(ValueError) as excinfo:
             convert_date_range("2030-01-01,00:00:00.0", "2025-01-01,00:00:00.0", "ntcip1218")
         assert "2030-01-01,00:00:00.0" in str(excinfo.value)
         assert "2025-01-01,00:00:00.0" in str(excinfo.value)
-
-    @pytest.mark.parametrize("mode_mib", ["ntcip1218", "rsu41"])
-    def test_equal_dates_are_allowed(self, mode_mib):
-        date_str = "2025-06-01,12:00:00.0"
-        start, stop = convert_date_range(date_str, date_str, mode_mib)
-        assert start == stop
-
-    def test_rsu41_truncation_makes_sub_minute_reversal_compare_equal(self):
-        # RSU 4.1 drops the seconds, so a pair that is reversed in real time but
-        # only below the minute encodes to two identical values and is allowed.
-        start, stop = convert_date_range(
-            "2025-06-01,12:00:30.0", "2025-06-01,12:00:29.0", "rsu41")
-        assert start == stop
-
-    def test_year_zero_is_ordered_without_datetime(self):
-        # calendar/datetime cannot represent year 0, but the encoding permits it.
-        start, stop = convert_date_range(
-            "0000-01-01,00:00:00.0", "0001-01-01,00:00:00.0", "ntcip1218")
-        assert start < stop
 
     @pytest.mark.parametrize("start,stop", [
         ("not-a-date", "2030-01-01,00:00:00.0"),
@@ -307,30 +313,49 @@ class _FakeInteger32:
 def _format(value) -> str:
     return format_snmp_value(_FakeVarBind(value))
 
+def _format_hex(value) -> str:
+    return format_snmp_hex(_FakeVarBind(value))
+
+def _format_text(value) -> str:
+    return format_snmp_text(_FakeVarBind(value))
+
+
+class TestPlainAndWrappedPayloads:
+    """
+    bytes and str payloads reach the formatters either plain or wrapped in an
+    OctetString. Test both.
+    """
+
+    @given(payload=st.one_of(st.binary(max_size=64), st.text(max_size=32)),
+           formatter=st.sampled_from(
+               [format_snmp_value, format_snmp_hex, format_snmp_text, format_snmp_ipv6]))
+    @example(payload=bytes.fromhex("07E9010100000000"), formatter=format_snmp_value)
+    @example(payload=bytes.fromhex("00000000000000000000FFFFC0A837BF"), formatter=format_snmp_ipv6)
+    @example(payload="rsu-config", formatter=format_snmp_value)
+    def test_format_identically(self, payload, formatter):
+        plain = formatter(_FakeVarBind(payload))
+        wrapped = formatter(_FakeVarBind(_FakeOctetString(payload)))
+        assert plain == wrapped
+
 
 class TestFormatSnmpValueIntegers:
-    """INTEGER32 values arrive wrapped in an object exposing .value."""
+    """Integers arrive normally, or as an INTEGER32 wrapped in an object exposing .value."""
 
-    @pytest.mark.parametrize("number", [0, 1, -1, 63, 65535])
-    def test_wrapped_integer_is_stringified(self, number):
+    @given(number=st.integers())
+    @example(number=0)
+    @example(number=-1)
+    @example(number=65535)
+    def test_integers_are_stringified(self, number):
+        assert _format(number) == str(number)
         assert _format(_FakeInteger32(number)) == str(number)
-
-    def test_bare_integer_is_stringified(self):
-        assert _format(42) == "42"
-
-
-# bytes and str payloads reach format_snmp_value either bare or wrapped in an
-# OctetString (via .data); both routes must format identically.
-_BARE_OR_WRAPPED = pytest.mark.parametrize(
-    "wrap", [lambda v: v, _FakeOctetString], ids=["bare", "octetstring"])
 
 
 class TestFormatSnmpValueBytes:
-    """bytes payloads: tried as a DateAndTime, then printable ASCII, then hex."""
+    """bytes payloads: shown as a DateAndTime if they are one, then printable ASCII, then hex."""
 
-    @_BARE_OR_WRAPPED
     @pytest.mark.parametrize("data,expected", [
         (bytes.fromhex("07E9010100000000"), "2025-01-01,00:00:00.0"),  # 8 octets read as DateAndTime
+        (bytes.fromhex("07E90C1F173B3C09"), "2025-12-31,23:59:60.9"),  # every field at its upper limit
         (b"rsu-config", "rsu-config"),      # printable ASCII decodes to text
         (b"a\tb\nc", "61 09 62 0a 63"),     # control characters are never expected; hex makes them visible
         (b"\xff\xfe", "ff fe"),             # not valid UTF-8
@@ -338,21 +363,40 @@ class TestFormatSnmpValueBytes:
         (b"\x00\x0f\xff", "00 0f ff"),      # hex is space-separated and zero-padded
         (b"", ""),
     ])
-    def test_bytes_are_formatted(self, wrap, data, expected):
-        assert _format(wrap(data)) == expected
+    def test_bytes_are_formatted(self, data, expected):
+        assert _format(_FakeOctetString(data)) == expected
+
+    @pytest.mark.parametrize("data,expected", [
+        (b"RSU-4100", "RSU-4100"),                                       # e.g. a device description
+        (b"10.0.0.1", "10.0.0.1"),
+        (bytes.fromhex("07E90D0100000000"), "07 e9 0d 01 00 00 00 00"),  # month 13
+        (bytes.fromhex("07E9010118000000"), "07 e9 01 01 18 00 00 00"),  # hour 24
+        (bytes(8), "00 00 00 00 00 00 00 00"),                           # month 0, day 0
+    ], ids=["text", "ip", "month-13", "hour-24", "all-zeros"])
+    def test_eight_octets_shown_as_date(self, data, expected):
+        assert _format(_FakeOctetString(data)) == expected
+
+    @given(text=st.text(alphabet=st.characters(min_codepoint=0x20, max_codepoint=0x7E),
+                        min_size=8, max_size=8))
+    def test_eight_printable_characters_are_always_shown_as_text(self, text):
+        assert _format(_FakeOctetString(text.encode("ascii"))) == text
+
+    @given(fields=_valid_dates)
+    def test_every_valid_date_is_shown_as_a_date(self, fields):
+        encoded = convert_datetime(_date_str(fields), "ntcip1218")
+        assert _format(_FakeOctetString(encoded)) == _date_str(fields)
 
 
 class TestFormatSnmpValueText:
     """str payloads get the same printable-ASCII check as bytes."""
 
-    @_BARE_OR_WRAPPED
     @pytest.mark.parametrize("value,expected", [
         ("rsu-config", "rsu-config"),
         ("\x01\x02", "01 02"),
         ("a\tb", "61 09 62"),
     ])
-    def test_text_is_formatted(self, wrap, value, expected):
-        assert _format(wrap(value)) == expected
+    def test_text_is_formatted(self, value, expected):
+        assert _format(_FakeOctetString(value)) == expected
 
 
 class TestFormatSnmpValueFallbacks:
@@ -366,63 +410,108 @@ class TestFormatSnmpValueFallbacks:
         assert _format(_FakeOctetString(12345)) == "12345"
 
 
-def _format_hex(value) -> str:
-    return format_snmp_hex(_FakeVarBind(value))
-
-
 class TestFormatSnmpHex:
     """format_snmp_hex: OctetStrings always become unspaced, uppercase hex, never text or a date."""
 
-    @_BARE_OR_WRAPPED
-    @pytest.mark.parametrize("data,expected", [
-        (bytes.fromhex("8002"), "8002"),                            # typical PSID
-        (b"Hello World", "48656C6C6F20576F726C64"),                 # printable ASCII is not decoded
-        (b"     ", "2020202020"),                                   # all-space payload is kept
-        (bytes.fromhex("0011223344556677"), "0011223344556677"),    # 8 octets are not read as a date
-        (b"\x00\x0f\xff", "000FFF"),                                # zero-padded
-        (b"", ""),
-    ], ids=["psid", "ascii", "spaces", "eight-octets", "zero-padded", "empty"])
-    def test_bytes_become_hex(self, wrap, data, expected):
-        assert _format_hex(wrap(data)) == expected
+    @given(data=st.binary(max_size=64))
+    @example(data=bytes.fromhex("8002"))                # typical PSID
+    @example(data=b"\x00\x0f\xff")                      # zero-padded, uppercase
+    @example(data=b"Hello World")                       # printable ASCII is not decoded
+    @example(data=bytes.fromhex("07E9010100000000"))    # a date is not shown as one
+    @example(data=b"")
+    def test_hex_decodes_back_to_the_same_bytes(self, data):
+        result = _format_hex(_FakeOctetString(data))
+        assert len(result) == 2 * len(data)             # two digits per octet, nothing between
+        assert bytes.fromhex(result) == data
+        assert result == result.upper()
 
-    @_BARE_OR_WRAPPED
     @pytest.mark.parametrize("value,expected", [
         ("rsu", "727375"),
         ("\x01\x02", "0102"),
     ], ids=["printable", "unprintable"])
-    def test_text_becomes_hex(self, wrap, value, expected):
-        assert _format_hex(wrap(value)) == expected
+    def test_text_becomes_hex(self, value, expected):
+        assert _format_hex(_FakeOctetString(value)) == expected
 
     @pytest.mark.parametrize("value", [_FakeInteger32(32770), 42, None],
-                             ids=["integer32", "bare-int", "none"])
+                             ids=["integer32", "int", "none"])
     def test_non_octet_values_match_format_snmp_value(self, value):
         assert _format_hex(value) == _format(value)
-
-
-def _format_text(value) -> str:
-    return format_snmp_text(_FakeVarBind(value))
 
 
 class TestFormatSnmpText:
     """format_snmp_text: OctetStrings become printable ASCII text, then hex, never a date."""
 
-    @_BARE_OR_WRAPPED
     @pytest.mark.parametrize("data,expected", [
-        (b"10.0.0.1", "10.0.0.1"),                                  # 8 characters are not read as a date
         (b"192.168.1.10", "192.168.1.10"),
         (b"fe80::1", "fe80::1"),
+        (bytes.fromhex("07E9010100000000"), "07 e9 01 01 00 00 00 00"),  # a date is not shown as one
         (bytes.fromhex("0011223344556677"), "00 11 22 33 44 55 66 77"),  # unprintable falls back to hex
         (b"", ""),
-    ], ids=["eight-char-ip", "ipv4", "ipv6", "unprintable", "empty"])
-    def test_bytes_become_text(self, wrap, data, expected):
-        assert _format_text(wrap(data)) == expected
+    ], ids=["ipv4", "ipv6", "date", "unprintable", "empty"])
+    def test_bytes_become_text(self, data, expected):
+        assert _format_text(_FakeOctetString(data)) == expected
 
-    @_BARE_OR_WRAPPED
     @pytest.mark.parametrize("value", ["10.0.0.1", "\x01\x02"], ids=["printable", "unprintable"])
-    def test_text_matches_format_snmp_value(self, wrap, value):
-        assert _format_text(wrap(value)) == _format(wrap(value))
+    def test_text_matches_format_snmp_value(self, value):
+        assert _format_text(_FakeOctetString(value)) == _format(_FakeOctetString(value))
 
     @pytest.mark.parametrize("value", [_FakeInteger32(5000), 42, None],
-                             ids=["integer32", "bare-int", "none"])
+                             ids=["integer32", "int", "none"])
     def test_non_octet_values_match_format_snmp_value(self, value):
         assert _format_text(value) == _format(value)
+
+
+class TestEncodeIpv6Address:
+    """encode_ipv6_address: RSU 4.1 IP columns are a 16-octet Ipv6Address, never text."""
+
+    # The exact octets on the wire. A round trip cannot check these: sending
+    # the address as text and reading it back as text round-trips too.
+    @pytest.mark.parametrize("ip,expected_hex", [
+        ("192.168.55.191", "00000000000000000000FFFFC0A837BF"),  # IPv4 is sent IPv4-mapped
+        (" 10.0.0.1 ", "00000000000000000000FFFF0A000001"),      # surrounding whitespace is ignored
+        ("fe80::1", "FE800000000000000000000000000001"),
+    ], ids=["ipv4", "whitespace", "ipv6"])
+    def test_known_encodings(self, ip, expected_hex):
+        assert encode_ipv6_address(ip) == bytes.fromhex(expected_hex)
+
+    @given(ip=st.ip_addresses(v=4))
+    def test_any_ipv4_address_is_sent_ipv4_mapped(self, ip):
+        encoded = encode_ipv6_address(str(ip))
+        assert encoded == bytes(10) + b"\xff\xff" + ip.packed
+        assert format_ipv6_address(encoded) == str(ip)
+
+    @pytest.mark.parametrize("ip", ["192.168.55.256", "rsu.local"], ids=["octet-256", "hostname"])
+    def test_rejects_invalid_address(self, ip):
+        with pytest.raises(ValueError, match="Invalid IP address"):
+            encode_ipv6_address(ip)
+
+
+class TestFormatIpv6Address:
+    """format_ipv6_address: 16 octets render as an address, IPv4-mapped ones as dotted IPv4."""
+
+    @given(data=st.binary(min_size=16, max_size=16))
+    @example(data=bytes(16))
+    @example(data=bytes.fromhex("00000000000000000000FFFFC0A837BF"))
+    def test_any_sixteen_octets_survive_display_and_re_encoding(self, data):
+        assert encode_ipv6_address(format_ipv6_address(data)) == data
+
+    def test_all_zeros_is_the_unspecified_address(self):
+        assert format_ipv6_address(bytes(16)) == "::"
+
+    @pytest.mark.parametrize("data,expected", [
+        (b"192.168.55.191", "192.168.55.191"),  # text, as older versions of this tool sent it
+        (b"\xc0\xa8\x37\xbf", "c0 a8 37 bf"),   # 4 octets: shown as hex
+    ], ids=["text", "four-octets"])
+    def test_other_lengths_are_shown_as_text_or_hex(self, data, expected):
+        assert format_ipv6_address(data) == expected
+
+
+class TestFormatSnmpIpv6:
+    """format_snmp_ipv6: unwraps the VarBind, then formats as format_ipv6_address."""
+
+    def test_ipv4_mapped_is_dotted(self):
+        data = bytes.fromhex("00000000000000000000FFFFC0A837BF")
+        assert format_snmp_ipv6(_FakeVarBind(_FakeOctetString(data))) == "192.168.55.191"
+
+    def test_non_octet_value_matches_format_snmp_value(self):
+        assert format_snmp_ipv6(_FakeVarBind(_FakeInteger32(0))) == _format(_FakeInteger32(0))

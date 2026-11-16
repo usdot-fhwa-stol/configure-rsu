@@ -1,4 +1,5 @@
 import calendar
+import ipaddress
 import struct
 
 # Valid ranges for each field of a DateAndTime value, per RFC 2579, erratum 417.
@@ -193,13 +194,22 @@ def _format_octet_text(data: bytes) -> str:
 
     return _to_hex(data)
 
+def _is_datetime(data: bytes) -> bool:
+    """
+    Check whether an OctetString payload is a DateAndTime: 8 octets with
+    fields within the ranges RFC 2579 allows.
+    """
+    if len(data) != _DATETIME_STRUCT.size:
+        return False
+
+    fields = _DATETIME_STRUCT.unpack(data)
+    return all(low <= value <= high
+               for value, (_, low, high) in zip(fields, _FIELD_RANGES))
+
 def _format_octet_bytes(data: bytes) -> str:
     """Format an OctetString payload for display."""
-    if len(data) == 8:
-        datetime_str = convert_snmp_datetime_to_string(data)
-        # Only return as datetime if it looks valid (not all hex).
-        if ',' in datetime_str and '-' in datetime_str:
-            return datetime_str
+    if _is_datetime(data):
+        return convert_snmp_datetime_to_string(data)
 
     return _format_octet_text(data)
 
@@ -210,7 +220,10 @@ def _format_text(value: str) -> str:
     return value
 
 def format_snmp_value(varbind) -> str:
-    """Format SNMP VarBind value, converting binary data to hex string if needed, and 8-byte octet strings to datetime."""
+    """
+    Format SNMP VarBind value for display: an 8-octet DateAndTime as a date,
+    printable ASCII as text, and any other binary data as a hex string.
+    """
     value = varbind.value
 
     # Handle INTEGER32 types
@@ -249,6 +262,49 @@ def format_snmp_text(varbind) -> str:
     data = value.data if hasattr(value, 'data') else value
     if isinstance(data, bytes):
         return _format_octet_text(data)
+    return format_snmp_value(varbind)
+
+def encode_ipv6_address(ip_str: str) -> bytes:
+    """
+    Encode an IP address as the 16-octet Ipv6Address (IPV6-TC, RFC 2465) that
+    the RSU 4.1 MIB uses for IP columns such as rsuDsrcFwdDestIpAddr.
+
+    Example:
+        "192.168.55.191" -> 00 00 00 00 00 00 00 00 00 00 FF FF C0 A8 37 BF
+
+    Raises:
+        ValueError: If ip_str is not a valid IPv4 or IPv6 address.
+    """
+    try:
+        addr = ipaddress.ip_address(ip_str.strip())
+    except ValueError:
+        raise ValueError(
+            f"Invalid IP address '{ip_str}'. Expected an IPv4 or IPv6 address.") from None
+
+    if addr.version == 4:
+        addr = ipaddress.IPv6Address(f"::ffff:{addr}")
+    return addr.packed
+
+def format_ipv6_address(data: bytes) -> str:
+    """
+    Render a 16-octet Ipv6Address for display: IPv4-mapped addresses as dotted
+    IPv4, any other address in IPv6 notation (all zeros, i.e. unset, is "::").
+    A payload that is not 16 octets is shown as text or hex, as format_snmp_text would.
+    """
+    if len(data) != 16:
+        return _format_octet_text(data)
+
+    addr = ipaddress.IPv6Address(data)
+    if addr.ipv4_mapped is not None:
+        return str(addr.ipv4_mapped)
+    return str(addr)
+
+def format_snmp_ipv6(varbind) -> str:
+    """Format an Ipv6Address VarBind, e.g. an RSU 4.1 rsuDsrcFwdDestIpAddr."""
+    value = varbind.value
+    data = value.data if hasattr(value, 'data') else value
+    if isinstance(data, bytes):
+        return format_ipv6_address(data)
     return format_snmp_value(varbind)
 
 def get_ifm_help_content() -> str:
@@ -378,6 +434,11 @@ RSU 4.1 (rsuDsrcForwardTable, 1.0.15628.4.1.7.1):
     Uses Enable (0 = off, 1 = on) instead of Secure/Auth Msg Interval.
     Start/Stop dates are 6-octet values that drop the seconds/deciseconds
     (e.g. 2025-01-01,00:00 UTC -> 07 E9 01 01 00 00).
+    Destination IP is a 16-octet Ipv6Address; an IPv4 address is sent
+    IPv4-mapped (e.g. 192.168.55.191 -> ::ffff:192.168.55.191 ->
+    00 00 00 00 00 00 00 00 00 00 FF FF C0 A8 37 BF).
+    Field ranges: Dest Port 1024-65535, Protocol 1 = TCP / 2 = UDP,
+    RSSI -100 to -60, Interval 1-9.
 """
 
 def get_srm_help_content() -> str:
