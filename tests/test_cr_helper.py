@@ -373,7 +373,7 @@ class TestFormatSnmpValueBytes:
         (bytes.fromhex("07E9010118000000"), "07 e9 01 01 18 00 00 00"),  # hour 24
         (bytes(8), "00 00 00 00 00 00 00 00"),                           # month 0, day 0
     ], ids=["text", "ip", "month-13", "hour-24", "all-zeros"])
-    def test_eight_octets_shown_as_date(self, data, expected):
+    def test_eight_octets_that_are_not_dates_are_not_shown_as_dates(self, data, expected):
         assert _format(_FakeOctetString(data)) == expected
 
     @given(text=st.text(alphabet=st.characters(min_codepoint=0x20, max_codepoint=0x7E),
